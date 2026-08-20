@@ -1,0 +1,38 @@
+recalculate:
+  name: Recalculate plan
+  description: Fetch fresh inputs, rebuild the 48-hour plan, and apply the current hour when not in shadow mode.
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: Optional; when omitted every scheduler entry is recalculated.
+      example: 01HZX...
+      selector:
+        text:
+
+set_override:
+  name: Set device override
+  description: Select automatic, forced-on, or forced-off operation, optionally until a timestamp.
+  fields:
+    entry_id:
+      name: Config entry ID
+      selector:
+        text:
+    device_id:
+      name: Scheduler device ID
+      required: true
+      selector:
+        text:
+    mode:
+      name: Mode
+      required: true
+      selector:
+        select:
+          options:
+            - auto
+            - on
+            - off
+    until:
+      name: End time
+      description: Required for a timed override; ignored in Auto mode.
+      selector:
+        datetime:

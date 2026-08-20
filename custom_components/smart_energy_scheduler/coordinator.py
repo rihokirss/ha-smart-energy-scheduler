@@ -1,0 +1,627 @@
+"""Data collection, planning, persistence, and output control."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections import defaultdict
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from typing import Any
+
+from homeassistant.components.energy.data import async_get_manager
+from homeassistant.components.energy.websocket_api import async_get_energy_platforms
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_component import DATA_INSTANCES
+from homeassistant.helpers.storage import Store
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
+
+from .const import (
+    CONF_AREA,
+    CONF_BASE_HOURS,
+    CONF_BASE_LOAD_W,
+    CONF_BUY_MARGIN,
+    CONF_CURRENCY,
+    CONF_DAY_END,
+    CONF_DAY_START,
+    CONF_ENABLED,
+    CONF_FAILURE_MODE,
+    CONF_FEEDBACK_ENTITY,
+    CONF_HOURS_PER_DEGREE,
+    CONF_INVERTED,
+    CONF_MAX_HOURS,
+    CONF_MIN_HOURS,
+    CONF_MIN_OFF_HOURS,
+    CONF_MIN_ON_HOURS,
+    CONF_NETWORK_DAY,
+    CONF_NETWORK_NIGHT,
+    CONF_NOMINAL_POWER_W,
+    CONF_POWER_MULTIPLIER,
+    CONF_POWER_SENSOR,
+    CONF_REFERENCE_TEMPERATURE,
+    CONF_SELL_MARGIN,
+    CONF_SHADOW_MODE,
+    CONF_SOLAR_PRIORITY,
+    CONF_TARGET_ENTITY,
+    CONF_USE_WEATHER,
+    CONF_VAT,
+    CONF_WEATHER_ENTITY,
+    CONF_WEEKEND_NIGHT,
+    CONF_WINDOW_END,
+    CONF_WINDOW_START,
+    DOMAIN,
+    EVENT_PLAN_UPDATED,
+    FAILURE_FORCE_OFF,
+    FAILURE_FORCE_ON,
+    OVERRIDE_AUTO,
+    OVERRIDE_OFF,
+    OVERRIDE_ON,
+    STORAGE_KEY,
+    STORAGE_VERSION,
+    SUBENTRY_DEVICE,
+)
+from .engine import (
+    aggregate_hourly,
+    build_plans,
+    is_in_window,
+    merge_solar_forecast,
+    output_should_be_on,
+    parse_datetime,
+    parse_nordpool_response,
+    weather_target_hours,
+)
+from .models import DevicePlan, DeviceRuntimeState, HourPrice, PlanningDevice, TariffConfig
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class SchedulerData:
+    """Coordinator payload exposed to entities and websocket clients."""
+
+    generated_at: datetime
+    hours: list[HourPrice] = field(default_factory=list)
+    plans: dict[str, DevicePlan] = field(default_factory=dict)
+    temperatures: dict[str, float] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
+    """Coordinate the shared price, weather, solar, and device plan."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_interval=timedelta(minutes=15),
+        )
+        self.entry = entry
+        self.timezone = dt_util.get_time_zone(hass.config.time_zone) or dt_util.UTC
+        self.states: dict[str, DeviceRuntimeState] = {}
+        self._store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}")
+        self._apply_lock = asyncio.Lock()
+
+    @property
+    def device_subentries(self) -> list[ConfigSubentry]:
+        """Return configured scheduler devices."""
+        return list(self.entry.get_subentries_of_type(SUBENTRY_DEVICE))
+
+    async def async_load_state(self) -> None:
+        """Restore overrides and runtime counters."""
+        stored = await self._store.async_load() or {}
+        for subentry in self.device_subentries:
+            raw = stored.get("devices", {}).get(subentry.subentry_id, {})
+            override_until = raw.get("override_until")
+            last_accounted = raw.get("last_accounted_at")
+            self.states[subentry.subentry_id] = DeviceRuntimeState(
+                enabled=bool(raw.get("enabled", subentry.data.get(CONF_ENABLED, True))),
+                override=raw.get("override", OVERRIDE_AUTO),
+                override_until=parse_datetime(override_until) if override_until else None,
+                actual_hours_by_day={
+                    key: float(value) for key, value in raw.get("actual_hours_by_day", {}).items()
+                },
+                last_active=raw.get("last_active"),
+                last_accounted_at=parse_datetime(last_accounted) if last_accounted else None,
+                reason=raw.get("reason", "restored"),
+                locked_hour_start=parse_datetime(raw["locked_hour_start"])
+                if raw.get("locked_hour_start")
+                else None,
+                locked_active=raw.get("locked_active"),
+            )
+
+    async def async_save_state(self) -> None:
+        """Persist small mutable state; the plan itself is recalculated."""
+        await self._store.async_save(
+            {
+                "devices": {
+                    device_id: {
+                        "enabled": state.enabled,
+                        "override": state.override,
+                        "override_until": state.override_until.isoformat()
+                        if state.override_until
+                        else None,
+                        "actual_hours_by_day": state.actual_hours_by_day,
+                        "last_active": state.last_active,
+                        "last_accounted_at": state.last_accounted_at.isoformat()
+                        if state.last_accounted_at
+                        else None,
+                        "reason": state.reason,
+                        "locked_hour_start": state.locked_hour_start.isoformat()
+                        if state.locked_hour_start
+                        else None,
+                        "locked_active": state.locked_active,
+                    }
+                    for device_id, state in self.states.items()
+                }
+            }
+        )
+
+    def _tariff(self) -> TariffConfig:
+        data = self.entry.data
+        day_start = dt_util.parse_time(data[CONF_DAY_START])
+        day_end = dt_util.parse_time(data[CONF_DAY_END])
+        if day_start is None or day_end is None:
+            raise ValueError("Invalid day/night tariff time")
+        return TariffConfig(
+            buy_margin=float(data[CONF_BUY_MARGIN]),
+            sell_margin=float(data[CONF_SELL_MARGIN]),
+            vat_fraction=float(data[CONF_VAT]) / 100,
+            network_day=float(data[CONF_NETWORK_DAY]),
+            network_night=float(data[CONF_NETWORK_NIGHT]),
+            day_start=day_start,
+            day_end=day_end,
+            weekend_night=bool(data[CONF_WEEKEND_NIGHT]),
+        )
+
+    async def _async_fetch_prices(self, day: date) -> Any:
+        """Fetch raw Day-Ahead prices through the installed Nord Pool integration."""
+        if not self.hass.services.has_service("nordpool", "hourly"):
+            raise RuntimeError("nordpool.hourly service is not available")
+        return await self.hass.services.async_call(
+            "nordpool",
+            "hourly",
+            {
+                "date": day.isoformat(),
+                "area": [self.entry.data[CONF_AREA]],
+                "currency": self.entry.data[CONF_CURRENCY],
+            },
+            blocking=True,
+            return_response=True,
+        )
+
+    async def _async_fetch_solar(self) -> list[Mapping[str, float]]:
+        """Read the same Forecast.Solar series used by Energy Dashboard."""
+        manager = await async_get_manager(self.hass)
+        if manager.data is None:
+            return []
+        entry_ids: set[str] = set()
+        for source in manager.data.get("energy_sources", []):
+            if source.get("type") == "solar":
+                entry_ids.update(source.get("config_entry_solar_forecast") or [])
+        platforms = await async_get_energy_platforms(self.hass)
+        result: list[Mapping[str, float]] = []
+        for entry_id in entry_ids:
+            config_entry = self.hass.config_entries.async_get_entry(entry_id)
+            if config_entry is None or config_entry.domain not in platforms:
+                continue
+            forecast = await platforms[config_entry.domain](self.hass, entry_id)
+            if forecast and isinstance(forecast.get("wh_hours"), Mapping):
+                result.append(forecast["wh_hours"])
+        return result
+
+    async def _async_fetch_weather(self) -> tuple[dict[date, float], list[str]]:
+        """Average hourly apparent temperature by local date."""
+        entity_id = self.entry.data.get(CONF_WEATHER_ENTITY)
+        if not entity_id:
+            return {}, ["weather_entity_not_configured"]
+        component = self.hass.data.get(DATA_INSTANCES, {}).get("weather")
+        entity = component.get_entity(entity_id) if component else None
+        if entity is None:
+            raise RuntimeError(f"Weather entity {entity_id} is not loaded")
+        native_forecasts = await entity.async_forecast_hourly()
+        forecasts = entity._convert_forecast(native_forecasts or [])  # noqa: SLF001
+        grouped: dict[date, list[float]] = defaultdict(list)
+        fallback_used = False
+        for item in forecasts:
+            stamp = item.get("datetime")
+            if not stamp:
+                continue
+            value = item.get("apparent_temperature")
+            if value is None:
+                value = item.get("temperature")
+                fallback_used = value is not None or fallback_used
+            if value is not None:
+                grouped[parse_datetime(stamp).astimezone(self.timezone).date()].append(float(value))
+        warnings = ["weather_apparent_temperature_fallback"] if fallback_used else []
+        return {day: sum(values) / len(values) for day, values in grouped.items()}, warnings
+
+    async def _async_update_data(self) -> SchedulerData:
+        """Fetch inputs and calculate a complete, non-commanding plan."""
+        now = dt_util.now().astimezone(self.timezone)
+        warnings: list[str] = []
+        await self.async_account_actual(now)
+        try:
+            yesterday_payload, today_payload, tomorrow_payload = await asyncio.gather(
+                self._async_fetch_prices(now.date() - timedelta(days=1)),
+                self._async_fetch_prices(now.date()),
+                self._async_fetch_prices(now.date() + timedelta(days=1)),
+            )
+            quarters = parse_nordpool_response(yesterday_payload, self.entry.data[CONF_AREA])
+            quarters += parse_nordpool_response(today_payload, self.entry.data[CONF_AREA])
+            quarters += parse_nordpool_response(tomorrow_payload, self.entry.data[CONF_AREA])
+            unique_quarters = {(quarter.start, quarter.end): quarter for quarter in quarters}
+            hours = aggregate_hourly(unique_quarters.values(), self._tariff(), self.timezone)
+            # Expose both local calendar days so the chart starts at today's
+            # midnight. Planning still only receives current/future hours.
+            floor_now = now.replace(minute=0, second=0, microsecond=0)
+            horizon_start = floor_now.timestamp()
+            planning_days = {now.date(), now.date() + timedelta(days=1)}
+            hours = [hour for hour in hours if hour.start.date() in planning_days]
+            if not hours:
+                raise RuntimeError("Nord Pool returned no usable price slots")
+            planning_hours = [
+                hour
+                for hour in hours
+                if horizon_start <= hour.start.timestamp() < horizon_start + 48 * 3600
+            ]
+            if not planning_hours:
+                raise RuntimeError("Nord Pool returned no future price slots")
+        except Exception as err:  # noqa: BLE001 - input failure is represented in HA
+            _LOGGER.warning("Unable to build price horizon: %s", err)
+            return SchedulerData(generated_at=now, error=f"price_data: {err}")
+
+        solar_ok = False
+        try:
+            solar = await self._async_fetch_solar()
+            if not solar:
+                warnings.append("solar_forecast_missing")
+            else:
+                solar_ok = True
+            merge_solar_forecast(hours, solar, float(self.entry.data[CONF_BASE_LOAD_W]))
+        except Exception as err:  # noqa: BLE001
+            warnings.append(f"solar_forecast_error: {err}")
+
+        try:
+            temperatures, weather_warnings = await self._async_fetch_weather()
+            warnings.extend(weather_warnings)
+        except Exception as err:  # noqa: BLE001
+            temperatures = {}
+            warnings.append(f"weather_forecast_error: {err}")
+
+        planning_devices: list[PlanningDevice] = []
+        targets: dict[str, dict[date, int]] = {}
+        available_days = sorted({hour.start.date() for hour in planning_hours})
+        for subentry in self.device_subentries:
+            data = subentry.data
+            device_id = subentry.subentry_id
+            window_start = dt_util.parse_time(data[CONF_WINDOW_START])
+            window_end = dt_util.parse_time(data[CONF_WINDOW_END])
+            if window_start is None or window_end is None:
+                warnings.append(f"invalid_work_window:{device_id}")
+                continue
+            nominal_power = float(data[CONF_NOMINAL_POWER_W])
+            if (power_entity := data.get(CONF_POWER_SENSOR)) and (
+                power_state := self.hass.states.get(power_entity)
+            ) is not None:
+                try:
+                    observed_power = float(power_state.state) * float(
+                        data.get(CONF_POWER_MULTIPLIER, 1)
+                    )
+                    if observed_power > 10:
+                        nominal_power = observed_power
+                except (TypeError, ValueError):
+                    pass
+            planning_devices.append(
+                PlanningDevice(
+                    device_id=device_id,
+                    name=subentry.title,
+                    nominal_power_w=nominal_power,
+                    window_start=window_start,
+                    window_end=window_end,
+                    min_on_hours=int(data[CONF_MIN_ON_HOURS]),
+                    min_off_hours=int(data[CONF_MIN_OFF_HOURS]),
+                    solar_priority=int(data[CONF_SOLAR_PRIORITY]),
+                )
+            )
+            target_by_day: dict[date, int] = {}
+            for day in available_days:
+                apparent = temperatures.get(day) if data[CONF_USE_WEATHER] else None
+                target = weather_target_hours(
+                    float(data[CONF_BASE_HOURS]),
+                    float(data[CONF_REFERENCE_TEMPERATURE]),
+                    apparent,
+                    float(data[CONF_HOURS_PER_DEGREE]),
+                    float(data[CONF_MIN_HOURS]),
+                    float(data[CONF_MAX_HOURS]),
+                )
+                actual = self.states[device_id].actual_hours_by_day.get(day.isoformat(), 0.0)
+                available = sum(
+                    is_in_window(hour.start, window_start, window_end)
+                    for hour in planning_hours
+                    if hour.start.date() == day
+                )
+                remaining = max(0, round(target - actual)) if day == now.date() else target
+                state = self.states[device_id]
+                current_hour = now.replace(minute=0, second=0, microsecond=0)
+                if (
+                    day == now.date()
+                    and state.locked_active
+                    and state.locked_hour_start is not None
+                    and state.locked_hour_start.timestamp() == current_hour.timestamp()
+                ):
+                    remaining = max(1, remaining)
+                target_by_day[day] = min(remaining, available)
+            targets[device_id] = target_by_day
+
+        current_hour = now.replace(minute=0, second=0, microsecond=0)
+        forced_states: dict[str, dict[float, bool]] = {}
+        for subentry in self.device_subentries:
+            state = self.states[subentry.subentry_id]
+            if (
+                state.locked_hour_start is not None
+                and state.locked_active is not None
+                and state.locked_hour_start.timestamp() == current_hour.timestamp()
+            ):
+                forced_states[subentry.subentry_id] = {
+                    current_hour.timestamp(): state.locked_active
+                }
+        plans = build_plans(planning_hours, planning_devices, targets, forced_states)
+        for subentry in self.device_subentries:
+            plan = plans.get(subentry.subentry_id)
+            if plan is None:
+                continue
+            missing_weather = bool(subentry.data[CONF_USE_WEATHER]) and any(
+                day not in temperatures for day in available_days
+            )
+            if not solar_ok or missing_weather:
+                plan.valid = False
+                plan.error = (
+                    "solar_forecast_missing" if not solar_ok else "weather_forecast_missing"
+                )
+                plan.hours = []
+        for device_id, plan in plans.items():
+            state = self.states[device_id]
+            if state.locked_hour_start is None or (
+                state.locked_hour_start.timestamp() != current_hour.timestamp()
+            ):
+                for hour in plan.hours:
+                    if hour.start.timestamp() == current_hour.timestamp():
+                        state.locked_hour_start = current_hour
+                        state.locked_active = hour.active
+                        break
+        data = SchedulerData(
+            generated_at=now,
+            hours=hours,
+            plans=plans,
+            temperatures={day.isoformat(): value for day, value in temperatures.items()},
+            warnings=warnings,
+        )
+        self.hass.bus.async_fire(EVENT_PLAN_UPDATED, self.as_dict(data))
+        return data
+
+    def _observed_active(self, subentry: ConfigSubentry) -> bool | None:
+        """Resolve physical activity from power, feedback, or target state."""
+        data = subentry.data
+        power_entity = data.get(CONF_POWER_SENSOR)
+        if power_entity and (state := self.hass.states.get(power_entity)) is not None:
+            try:
+                return float(state.state) * float(data.get(CONF_POWER_MULTIPLIER, 1)) > 10.0
+            except (TypeError, ValueError):
+                pass
+        feedback = data.get(CONF_FEEDBACK_ENTITY)
+        if (
+            feedback
+            and (state := self.hass.states.get(feedback)) is not None
+            and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE)
+        ):
+            return state.state in ("on", "open", "opening", "heat", "heating", "active")
+        state = self.hass.states.get(data[CONF_TARGET_ENTITY])
+        if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+            return None
+        output_on = state.state == "on"
+        return not output_on if data[CONF_INVERTED] else output_on
+
+    async def async_account_actual(self, now: datetime | None = None) -> None:
+        """Integrate observed run time, splitting correctly at local midnight."""
+        now = now or dt_util.now().astimezone(self.timezone)
+        for subentry in self.device_subentries:
+            state = self.states.setdefault(subentry.subentry_id, DeviceRuntimeState())
+            active = self._observed_active(subentry)
+            if state.last_accounted_at and state.last_active:
+                cursor = state.last_accounted_at.astimezone(self.timezone)
+                end = now.astimezone(self.timezone)
+                # Ignore implausibly large gaps; HA was not observing the device then.
+                if timedelta(0) <= end - cursor <= timedelta(hours=1):
+                    while cursor < end:
+                        midnight = datetime.combine(
+                            cursor.date() + timedelta(days=1),
+                            datetime.min.time(),
+                            tzinfo=self.timezone,
+                        )
+                        segment_end = min(end, midnight)
+                        key = cursor.date().isoformat()
+                        state.actual_hours_by_day[key] = (
+                            state.actual_hours_by_day.get(key, 0.0)
+                            + (segment_end - cursor).total_seconds() / 3600
+                        )
+                        cursor = segment_end
+            state.last_active = active
+            state.last_accounted_at = now
+            cutoff = now.date() - timedelta(days=7)
+            state.actual_hours_by_day = {
+                key: value
+                for key, value in state.actual_hours_by_day.items()
+                if date.fromisoformat(key) >= cutoff
+            }
+        await self.async_save_state()
+
+    def planned_active(self, device_id: str, moment: datetime | None = None) -> bool | None:
+        """Return the plan state for the absolute current hour."""
+        if not self.data or (plan := self.data.plans.get(device_id)) is None:
+            return None
+        moment = (moment or dt_util.now()).astimezone(self.timezone)
+        for hour in plan.hours:
+            if hour.start.timestamp() <= moment.timestamp() < hour.start.timestamp() + 3600:
+                return hour.active
+        return None
+
+    async def async_apply_outputs(self) -> None:
+        """Apply plan/override safely; never issue toggle commands."""
+        async with self._apply_lock:
+            now = dt_util.now().astimezone(self.timezone)
+            for subentry in self.device_subentries:
+                data = subentry.data
+                state = self.states[subentry.subentry_id]
+                if (
+                    state.override != OVERRIDE_AUTO
+                    and state.override_until
+                    and now >= state.override_until
+                ):
+                    state.override = OVERRIDE_AUTO
+                    state.override_until = None
+                if not state.enabled:
+                    state.reason = "disabled"
+                    continue
+                if state.override == OVERRIDE_ON:
+                    desired = True
+                    reason = "override_on"
+                elif state.override == OVERRIDE_OFF:
+                    desired = False
+                    reason = "override_off"
+                else:
+                    desired = self.planned_active(subentry.subentry_id, now)
+                    reason = "schedule"
+                    if desired is None:
+                        failure = data[CONF_FAILURE_MODE]
+                        if failure == FAILURE_FORCE_ON:
+                            desired, reason = True, "failure_force_on"
+                        elif failure == FAILURE_FORCE_OFF:
+                            desired, reason = False, "failure_force_off"
+                        else:
+                            state.reason = "failure_keep"
+                            continue
+                        current_hour = now.replace(minute=0, second=0, microsecond=0)
+                        state.locked_hour_start = current_hour
+                        state.locked_active = desired
+                state.reason = "shadow_" + reason if self.entry.data[CONF_SHADOW_MODE] else reason
+                state.next_transition = self._next_transition(subentry.subentry_id, now)
+                if self.entry.data[CONF_SHADOW_MODE]:
+                    continue
+                await self._async_set_target(subentry, bool(desired))
+            await self.async_save_state()
+
+    async def _async_set_target(self, subentry: ConfigSubentry, active: bool) -> None:
+        """Set an explicit state using generic HA turn_on/turn_off services."""
+        data = subentry.data
+        target = data[CONF_TARGET_ENTITY]
+        current = self.hass.states.get(target)
+        if current is None or current.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+            self.states[subentry.subentry_id].reason = "target_unavailable"
+            return
+        output_on = output_should_be_on(active, bool(data[CONF_INVERTED]))
+        if (current.state == "on") == output_on:
+            return
+        await self.hass.services.async_call(
+            "homeassistant",
+            "turn_on" if output_on else "turn_off",
+            {"entity_id": target},
+            blocking=True,
+        )
+
+    def _next_transition(self, device_id: str, now: datetime) -> datetime | None:
+        if not self.data or (plan := self.data.plans.get(device_id)) is None:
+            return None
+        current = self.planned_active(device_id, now)
+        for hour in plan.hours:
+            if hour.start.timestamp() > now.timestamp() and hour.active != current:
+                return hour.start
+        return None
+
+    async def async_set_override(
+        self, device_id: str, mode: str, until: datetime | None = None
+    ) -> None:
+        """Set a device override and apply it immediately."""
+        if device_id not in self.states:
+            raise ValueError(f"Unknown scheduler device {device_id}")
+        state = self.states[device_id]
+        state.override = mode
+        state.override_until = until if mode != OVERRIDE_AUTO else None
+        await self.async_apply_outputs()
+
+    def as_dict(self, data: SchedulerData | None = None) -> dict[str, Any]:
+        """Serialize the 48-hour plan for frontend and diagnostics."""
+        data = data or self.data
+        if data is None:
+            return {"entry_id": self.entry.entry_id, "ready": False}
+        return {
+            "entry_id": self.entry.entry_id,
+            "generated_at": data.generated_at.isoformat(),
+            "shadow_mode": self.entry.data[CONF_SHADOW_MODE],
+            "error": data.error,
+            "warnings": data.warnings,
+            "temperatures": data.temperatures,
+            "diagnostics": {
+                "grid_power": self._numeric_state(self.entry.data.get("grid_power_sensor")),
+                "pv_power": self._numeric_state(self.entry.data.get("pv_power_sensor")),
+            },
+            "hours": [
+                {
+                    "start": hour.start.isoformat(),
+                    "market_eur_mwh": round(hour.market_eur_mwh, 4),
+                    "import_eur_mwh": round(hour.import_eur_mwh, 4),
+                    "export_eur_mwh": round(hour.export_eur_mwh, 4),
+                    "pv_wh": round(hour.pv_wh, 1),
+                    "base_load_wh": round(hour.base_load_wh, 1),
+                    "surplus_wh": round(hour.surplus_wh, 1),
+                }
+                for hour in data.hours
+            ],
+            "devices": {
+                subentry.subentry_id: {
+                    "name": subentry.title,
+                    "target_entity": subentry.data[CONF_TARGET_ENTITY],
+                    "inverted": subentry.data[CONF_INVERTED],
+                    "feedback_entity": subentry.data.get(CONF_FEEDBACK_ENTITY),
+                    "power_sensor": subentry.data.get(CONF_POWER_SENSOR),
+                    "power_multiplier": subentry.data.get(CONF_POWER_MULTIPLIER, 1),
+                    "state": {
+                        "enabled": self.states[subentry.subentry_id].enabled,
+                        "override": self.states[subentry.subentry_id].override,
+                        "override_until": self.states[
+                            subentry.subentry_id
+                        ].override_until.isoformat()
+                        if self.states[subentry.subentry_id].override_until
+                        else None,
+                        "actual_hours_by_day": self.states[
+                            subentry.subentry_id
+                        ].actual_hours_by_day,
+                        "next_transition": self.states[
+                            subentry.subentry_id
+                        ].next_transition.isoformat()
+                        if self.states[subentry.subentry_id].next_transition
+                        else None,
+                        "reason": self.states[subentry.subentry_id].reason,
+                        "observed_active": self._observed_active(subentry),
+                    },
+                    "plan": data.plans.get(subentry.subentry_id).as_dict()
+                    if subentry.subentry_id in data.plans
+                    else None,
+                }
+                for subentry in self.device_subentries
+            },
+        }
+
+    def _numeric_state(self, entity_id: str | None) -> float | None:
+        """Read an optional diagnostics sensor without affecting planning."""
+        if not entity_id or (state := self.hass.states.get(entity_id)) is None:
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None

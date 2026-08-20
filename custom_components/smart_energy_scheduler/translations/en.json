@@ -1,0 +1,36 @@
+{
+  "title": "Smart Energy Scheduler",
+  "config": {
+    "step": {
+      "user": {"title": "Set up energy scheduling", "description": "Confirm the imported tariff values. Shadow mode is enabled by default, so no device is controlled yet.", "data": {"area": "Nord Pool area", "currency": "Currency", "buy_margin": "Purchase margin", "sell_margin": "Sale margin", "vat": "VAT", "network_day": "Day network fee", "network_night": "Night network fee", "day_start": "Day tariff starts", "day_end": "Day tariff ends", "weekend_night": "Use night tariff on weekends", "weather_entity": "Weather forecast entity", "base_load_w": "House base load", "grid_power_sensor": "Grid power sensor (diagnostic)", "pv_power_sensor": "PV power sensor (diagnostic)", "shadow_mode": "Shadow mode", "tariff_confirmed": "I have verified these tariff values"}},
+      "reconfigure": {"title": "Update shared scheduler settings", "description": "Turning shadow mode off enables explicit target commands.", "data": {"area": "Nord Pool area", "currency": "Currency", "buy_margin": "Purchase margin", "sell_margin": "Sale margin", "vat": "VAT", "network_day": "Day network fee", "network_night": "Night network fee", "day_start": "Day tariff starts", "day_end": "Day tariff ends", "weekend_night": "Use night tariff on weekends", "weather_entity": "Weather forecast entity", "base_load_w": "House base load", "grid_power_sensor": "Grid power sensor (diagnostic)", "pv_power_sensor": "PV power sensor (diagnostic)", "shadow_mode": "Shadow mode", "tariff_confirmed": "I have verified these tariff values"}}
+    },
+    "error": {"tariff_not_confirmed": "Verify the tariff values and confirm them before continuing."},
+    "abort": {"single_instance_allowed": "Only one instance is supported.", "reconfigure_successful": "Configuration updated successfully."}
+  },
+  "config_subentries": {
+    "device": {
+      "title": "Scheduled device",
+      "entry_type": "Controlled device",
+      "initiate_flow": {
+        "user": "Add controlled device",
+        "reconfigure": "Configure device"
+      },
+      "step": {
+        "user": {"title": "Add a controlled device", "description": "The target is never toggled. Active means turn_on unless Inverted output is enabled.", "data": {"name": "Name", "target_entity": "Target entity", "inverted": "Inverted output", "feedback_entity": "Active feedback entity", "power_sensor": "Power sensor", "power_multiplier": "Power multiplier", "nominal_power_w": "Nominal power", "window_start": "Allowed window starts", "window_end": "Allowed window ends", "base_hours": "Base hours per day", "min_hours": "Minimum hours per day", "max_hours": "Maximum hours per day", "min_on_hours": "Minimum consecutive ON hours", "min_off_hours": "Minimum consecutive OFF hours", "use_weather": "Adjust using apparent temperature (real feel)", "reference_temperature": "Reference apparent temperature", "hours_per_degree": "Hours added per colder degree", "solar_priority": "Solar priority", "failure_mode": "Missing-data behavior", "enabled": "Automatic control enabled"}},
+        "reconfigure": {"title": "Update controlled device", "description": "Use inverted output when physical OFF means active.", "data": {"name": "Name", "target_entity": "Target entity", "inverted": "Inverted output", "feedback_entity": "Active feedback entity", "power_sensor": "Power sensor", "power_multiplier": "Power multiplier", "nominal_power_w": "Nominal power", "window_start": "Allowed window starts", "window_end": "Allowed window ends", "base_hours": "Base hours per day", "min_hours": "Minimum hours per day", "max_hours": "Maximum hours per day", "min_on_hours": "Minimum consecutive ON hours", "min_off_hours": "Minimum consecutive OFF hours", "use_weather": "Adjust using apparent temperature (real feel)", "reference_temperature": "Reference apparent temperature", "hours_per_degree": "Hours added per colder degree", "solar_priority": "Solar priority", "failure_mode": "Missing-data behavior", "enabled": "Automatic control enabled"}}
+      },
+      "abort": {"reconfigure_successful": "Device updated successfully."},
+      "error": {"invalid_hour_limits": "Minimum daily hours cannot exceed maximum daily hours."}
+    }
+  },
+  "selector": {"failure_mode": {"options": {"force_on": "Force ON", "force_off": "Force OFF", "keep": "Keep current state"}}},
+  "entity": {
+    "switch": {"automatic_control": {"name": "Automatic control"}},
+    "select": {"override": {"name": "Manual override", "state": {"auto": "Auto", "on": "Forced ON", "off": "Forced OFF"}}},
+    "datetime": {"override_until": {"name": "Override until"}},
+    "number": {"base_hours": {"name": "Base hours"}, "minimum_hours": {"name": "Minimum hours"}, "maximum_hours": {"name": "Maximum hours"}},
+    "binary_sensor": {"scheduled_active": {"name": "Scheduled active"}},
+    "sensor": {"planned_hours": {"name": "Planned hours"}, "actual_hours": {"name": "Actual hours"}, "remaining_hours": {"name": "Remaining hours"}, "next_transition": {"name": "Next transition"}, "reason": {"name": "Control reason"}}
+  }
+}
