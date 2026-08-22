@@ -60,7 +60,9 @@ def test_price_plan_card_keeps_hour_labels_readable_with_horizontal_scroll() -> 
     assert "_scheduleHourCenter" in source
     assert "3600000 - Date.now() % 3600000" in source
     assert 'class="hour-label"' in source
-    assert 'transform="rotate(-45' not in source
+    assert 'transform="rotate(-90 ${x} ${labelY})"' in source
+    assert 'text-anchor="middle" dominant-baseline="central"' in source
+    assert 'dominant-baseline="central"' in source
     assert 'class="y-axis"' in source
     assert ".y-axis{position:absolute;z-index:2;left:0;top:0;width:28px" in source
     assert "box-shadow:3px 0 5px" not in source
@@ -77,7 +79,18 @@ def test_timeline_cards_use_hour_only_labels_and_narrow_bars() -> None:
     assert "step * .86" in source
     assert "minmax(8px, 1fr)" in source
     assert ".chart,.blocks{display:grid;gap:2px;min-width:480px}" in source
-    assert ".hour span{font-size:11px" in source
+    assert "padding-bottom:22px" in source
+    assert "bottom:2px" in source
+    assert "color:#000" in source
+    assert "text-shadow:" not in source
+    assert "stroke:rgba(0,0,0" not in source
+    assert "const barBottom = Math.max" in source
+    assert "const labelY = barBottom - 10" in source
+    assert "Math.abs(baseline - valueY) >= 18" in source
+    assert 'labelOnBar ? "on-bar" : "off-bar"' in source
+    assert ".hour-label.off-bar{fill:#000}" in source
+    assert "rotate(-90deg)" in source
+    assert 'class="hour-label"' in source
 
 
 def test_scheduler_card_centers_current_hour_and_keeps_controls_visible() -> None:
