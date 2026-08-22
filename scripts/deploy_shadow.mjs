@@ -153,6 +153,27 @@ if (process.env.HA_UPDATE_WEATHER_MODEL === "1") {
   weatherModelUpdate = settings;
   await new Promise((resolve) => setTimeout(resolve, 4000));
 }
+let planningStepUpdate = null;
+if (process.env.HA_PLANNING_STEP) {
+  const planningStep = Number(process.env.HA_PLANNING_STEP);
+  if (![15, 60].includes(planningStep)) throw new Error("HA_PLANNING_STEP must be 15 or 60");
+  const plans = await wsRequest({ type: "smart_energy_scheduler/get_plan" });
+  const plan = Array.isArray(plans) ? plans[0] : plans;
+  const deviceId = Object.keys(plan?.devices || {})[0];
+  if (!deviceId) throw new Error("No scheduler device found for planning-step update");
+  planningStepUpdate = {
+    device_id: deviceId,
+    entry_id: plan.entry_id,
+    planning_step_minutes: planningStep,
+  };
+  await wsRequest({
+    type: "call_service",
+    domain: "smart_energy_scheduler",
+    service: "update_device_settings",
+    service_data: planningStepUpdate,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+}
 let configurationMatches = null;
 if (process.env.HA_READ_CONFIG === "1") {
   const configResponse = await fetch(
@@ -686,6 +707,7 @@ console.log(JSON.stringify({
   tariff_update: tariffUpdate,
   solar_fallback_update: solarFallbackUpdate,
   weather_model_update: weatherModelUpdate,
+  planning_step_update: planningStepUpdate,
   configuration_matches: configurationMatches,
   config_flow: configFlow,
   inspection,

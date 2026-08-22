@@ -31,7 +31,14 @@ def _remaining(entity: SchedulerStatusSensor) -> float:
     if not plan:
         return 0.0
     today = _today(entity)
-    return float(sum(hour.active for hour in plan.hours if hour.start.date().isoformat() == today))
+    return round(
+        sum(
+            (slot.end - slot.start).total_seconds() / 3600
+            for slot in plan.hours
+            if slot.active and slot.start.date().isoformat() == today
+        ),
+        2,
+    )
 
 
 def _actual(entity: SchedulerStatusSensor) -> float:

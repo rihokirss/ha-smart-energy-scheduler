@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -23,6 +24,7 @@ from .const import (
     CONF_LEGACY_WIND_CHILL,
     CONF_MAX_HOURS,
     CONF_MIN_HOURS,
+    CONF_PLANNING_STEP_MINUTES,
     CONF_PREHEAT_HOURS,
     CONF_REFERENCE_TEMPERATURE,
     CONF_WEATHER_LOOKAHEAD_HOURS,
@@ -56,6 +58,7 @@ UPDATE_DEVICE_SETTINGS_SCHEMA = vol.Schema(
         vol.Optional(CONF_BASE_HOURS): vol.All(vol.Coerce(float), vol.Range(min=0, max=25)),
         vol.Optional(CONF_MIN_HOURS): vol.All(vol.Coerce(float), vol.Range(min=0, max=25)),
         vol.Optional(CONF_MAX_HOURS): vol.All(vol.Coerce(float), vol.Range(min=0, max=25)),
+        vol.Optional(CONF_PLANNING_STEP_MINUTES): vol.All(vol.Coerce(int), vol.In([15, 60])),
         vol.Optional(CONF_ALWAYS_ON_BELOW): vol.All(vol.Coerce(float), vol.Range(min=0, max=1000)),
         vol.Optional(CONF_ALWAYS_OFF_ABOVE): vol.All(vol.Coerce(float), vol.Range(min=0, max=1000)),
         vol.Optional(CONF_ALWAYS_ON_BELOW_ENABLED): cv.boolean,
@@ -128,6 +131,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             CONF_LEGACY_WIND_CHILL,
             CONF_ALWAYS_ON_BELOW,
             CONF_ALWAYS_OFF_ABOVE,
+            CONF_PLANNING_STEP_MINUTES,
         }
         for runtime in candidates:
             subentry = next(
@@ -183,6 +187,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartEnergyConfigEntry) 
 
     entry.async_on_unload(coordinator.async_add_listener(apply_after_refresh))
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+
+    @callback
+    def refresh_on_quarter(_now: dt_datetime) -> None:
+        """Apply 15-minute plans on exact wall-clock boundaries."""
+        hass.async_create_task(coordinator.async_request_refresh())
+
+    entry.async_on_unload(
+        async_track_time_change(
+            hass,
+            refresh_on_quarter,
+            minute=[0, 15, 30, 45],
+            second=0,
+        )
+    )
     if hass.state is not CoreState.running:
 
         @callback

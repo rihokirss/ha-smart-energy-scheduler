@@ -18,7 +18,7 @@ class QuarterPrice:
 
 @dataclass(slots=True)
 class HourPrice:
-    """One local scheduler hour."""
+    """One priced local interval (an hour or a planning slot)."""
 
     start: datetime
     end: datetime
@@ -62,15 +62,17 @@ class PlanningDevice:
     min_on_hours: int
     min_off_hours: int
     solar_priority: int
+    planning_step_minutes: int = 60
     always_on_below_eur_mwh: float | None = None
     always_off_above_eur_mwh: float | None = None
 
 
 @dataclass(slots=True)
 class PlannedHour:
-    """One planned hour and its cost explanation."""
+    """One planned interval and its cost explanation."""
 
     start: datetime
+    end: datetime
     active: bool
     effective_eur_mwh: float
     import_eur_mwh: float
@@ -84,7 +86,7 @@ class DevicePlan:
     """A device plan across the available horizon."""
 
     device_id: str
-    target_hours: dict[date, int]
+    target_hours: dict[date, float]
     required_hours: dict[date, int] = field(default_factory=dict)
     apparent_temperatures: dict[date, float] = field(default_factory=dict)
     hours: list[PlannedHour] = field(default_factory=list)
@@ -92,9 +94,9 @@ class DevicePlan:
     error: str | None = None
 
     def active_at(self, moment: datetime) -> bool | None:
-        """Return planned state for the hour containing moment."""
+        """Return planned state for the interval containing moment."""
         for slot in self.hours:
-            if slot.start.timestamp() <= moment.timestamp() < slot.start.timestamp() + 3600:
+            if slot.start.timestamp() <= moment.timestamp() < slot.end.timestamp():
                 return slot.active
         return None
 
@@ -115,6 +117,7 @@ class DevicePlan:
             "hours": [
                 {
                     "start": hour.start.isoformat(),
+                    "end": hour.end.isoformat(),
                     "active": hour.active,
                     "effective_eur_mwh": round(hour.effective_eur_mwh, 4),
                     "import_eur_mwh": round(hour.import_eur_mwh, 4),
@@ -142,3 +145,5 @@ class DeviceRuntimeState:
     reason: str = "initializing"
     locked_hour_start: datetime | None = None
     locked_active: bool | None = None
+    cycle_started_at: datetime | None = None
+    cycle_active: bool | None = None

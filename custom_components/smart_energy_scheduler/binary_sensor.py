@@ -29,7 +29,7 @@ async def async_setup_entry(
 
 
 class SchedulerActiveBinarySensor(SchedulerEntity, BinarySensorEntity):
-    """Whether the current local hour is scheduled active."""
+    """Whether the current local planning interval is scheduled active."""
 
     entity_description = DESCRIPTION
 

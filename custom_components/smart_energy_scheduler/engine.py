@@ -166,6 +166,46 @@ def aggregate_hourly(
     return result
 
 
+def price_intervals(
+    quarters: Iterable[QuarterPrice], tariff: TariffConfig, timezone: Any
+) -> list[HourPrice]:
+    """Price each Nord Pool delivery interval without hourly aggregation."""
+    result: list[HourPrice] = []
+    for quarter in sorted(quarters, key=lambda item: item.start):
+        local_start = quarter.start.astimezone(timezone)
+        network = tariff.network_day if is_day_tariff(local_start, tariff) else tariff.network_night
+        energy_price = (quarter.market_eur_mwh + tariff.buy_margin) * (1 + tariff.vat_fraction)
+        network_price = (
+            network if tariff.network_includes_vat else network * (1 + tariff.vat_fraction)
+        )
+        result.append(
+            HourPrice(
+                start=local_start,
+                end=quarter.end.astimezone(timezone),
+                market_eur_mwh=quarter.market_eur_mwh,
+                import_eur_mwh=energy_price + network_price,
+                export_eur_mwh=quarter.market_eur_mwh + tariff.sell_margin,
+            )
+        )
+    return result
+
+
+def distribute_hour_energy(hours: Sequence[HourPrice], slots: Sequence[HourPrice]) -> None:
+    """Distribute hourly PV and base-load energy over overlapping price slots."""
+    for slot in slots:
+        slot.pv_wh = 0.0
+        slot.base_load_wh = 0.0
+        for hour in hours:
+            overlap_start = max(slot.start.timestamp(), hour.start.timestamp())
+            overlap_end = min(slot.end.timestamp(), hour.end.timestamp())
+            if overlap_end <= overlap_start:
+                continue
+            hour_seconds = max(1.0, hour.end.timestamp() - hour.start.timestamp())
+            fraction = (overlap_end - overlap_start) / hour_seconds
+            slot.pv_wh += hour.pv_wh * fraction
+            slot.base_load_wh += hour.base_load_wh * fraction
+
+
 def merge_solar_forecast(
     hours: Sequence[HourPrice], forecasts: Iterable[Mapping[str, float]], base_load_w: float
 ) -> None:
@@ -298,7 +338,8 @@ def output_should_be_on(active: bool, inverted: bool) -> bool:
 def _effective_cost(
     hour: HourPrice, power_w: float, remaining_solar_wh: float
 ) -> tuple[float, float]:
-    energy = max(1.0, power_w)
+    duration_h = max(0.0, (hour.end - hour.start).total_seconds() / 3600)
+    energy = max(1.0, power_w * duration_h)
     solar = min(energy, max(0.0, remaining_solar_wh))
     grid = energy - solar
     cost = (solar * hour.export_eur_mwh + grid * hour.import_eur_mwh) / energy
@@ -311,15 +352,32 @@ def _optimize_binary_sequence(
     targets: Mapping[date, int],
     device: PlanningDevice,
     forced_states: Mapping[float, bool] | None = None,
+    initial_state: tuple[bool, int] | None = None,
 ) -> list[bool] | None:
     """Dynamic program enforcing target counts and minimum runs."""
+    if not hours:
+        return []
+    slot_minutes = max(1, round((hours[0].end - hours[0].start).total_seconds() / 60))
+    min_on_slots = max(1, round(device.min_on_hours * 60 / slot_minutes))
+    min_off_slots = max(1, round(device.min_off_hours * 60 / slot_minutes))
     days = sorted(targets)
     day_index = {day: index for index, day in enumerate(days)}
     # (counts, on, capped_run) -> (cost, path)
+    initial_active, initial_run = initial_state or (False, min_off_slots)
+    initial_cap = min_on_slots if initial_active else min_off_slots
     states: dict[tuple[tuple[int, ...], bool, int], tuple[float, tuple[bool, ...]]] = {
-        ((0,) * len(days), False, max(1, device.min_off_hours)): (0.0, ())
+        ((0,) * len(days), initial_active, min(initial_cap, max(0, initial_run))): (0.0, ())
     }
     for idx, hour in enumerate(hours):
+        if idx and hour.start.date() != hours[idx - 1].start.date():
+            previous_day = hours[idx - 1].start.date()
+            previous_index = day_index.get(previous_day)
+            if previous_index is not None:
+                states = {
+                    key: value
+                    for key, value in states.items()
+                    if key[0][previous_index] == targets[previous_day]
+                }
         next_states: dict[tuple[tuple[int, ...], bool, int], tuple[float, tuple[bool, ...]]] = {}
         local_day = hour.start.date()
         target_index = day_index.get(local_day)
@@ -328,17 +386,28 @@ def _optimize_binary_sequence(
         )
         for (counts, was_on, run), (total_cost, path) in states.items():
             forced = (forced_states or {}).get(hour.start.timestamp())
-            choices = (forced,) if forced is not None else ((False, True) if allowed else (False,))
+            transition_allowed = hour.start.minute % device.planning_step_minutes == 0
+            choices = (
+                (forced,)
+                if forced is not None
+                else (was_on,)
+                if not transition_allowed
+                else (False, True)
+                if allowed
+                else (False,)
+            )
             for turn_on in choices:
                 if turn_on and not allowed:
                     continue
                 if turn_on != was_on:
-                    required = device.min_on_hours if was_on else device.min_off_hours
+                    if not transition_allowed:
+                        continue
+                    required = min_on_slots if was_on else min_off_slots
                     if run < required:
                         continue
                     new_run = 1
                 else:
-                    cap = device.min_on_hours if turn_on else device.min_off_hours
+                    cap = min_on_slots if turn_on else min_off_slots
                     new_run = min(max(1, cap), run + 1)
                 new_counts = list(counts)
                 if turn_on:
@@ -357,7 +426,7 @@ def _optimize_binary_sequence(
     for (counts, on, run), value in states.items():
         if counts != expected:
             continue
-        if on and run < device.min_on_hours:
+        if on and run < min_on_slots:
             continue
         candidates.append(value)
     return list(min(candidates, key=lambda item: item[0])[1]) if candidates else None
@@ -366,15 +435,27 @@ def _optimize_binary_sequence(
 def build_plans(
     hours: Sequence[HourPrice],
     devices: Sequence[PlanningDevice],
-    targets: Mapping[str, Mapping[date, int]],
+    targets: Mapping[str, Mapping[date, float]],
     forced_states: Mapping[str, Mapping[float, bool]] | None = None,
-    minimum_targets: Mapping[str, Mapping[date, int]] | None = None,
+    minimum_targets: Mapping[str, Mapping[date, float]] | None = None,
+    initial_states: Mapping[str, tuple[bool, int]] | None = None,
 ) -> dict[str, DevicePlan]:
     """Plan devices in solar priority order without double-counting PV."""
     remaining_solar = {hour.start: hour.surplus_wh for hour in hours}
     result: dict[str, DevicePlan] = {}
+    if not hours:
+        return result
+    slot_minutes = max(1, round((hours[0].end - hours[0].start).total_seconds() / 60))
+    slots_per_hour = 60 / slot_minutes
     for device in sorted(devices, key=lambda item: (item.solar_priority, item.device_id)):
-        device_targets = dict(targets.get(device.device_id, {}))
+        device_targets = {
+            day: round(value * slots_per_hour)
+            for day, value in targets.get(device.device_id, {}).items()
+        }
+        device_minimum_targets = {
+            day: round(value * slots_per_hour)
+            for day, value in (minimum_targets or {}).get(device.device_id, {}).items()
+        }
         priced = [
             _effective_cost(hour, device.nominal_power_w, remaining_solar[hour.start])
             for hour in hours
@@ -390,12 +471,6 @@ def build_plans(
             )
             if (
                 allowed
-                and device.always_on_below_eur_mwh is not None
-                and cost <= device.always_on_below_eur_mwh
-            ):
-                always_on_forced[hour.start.timestamp()] = True
-            if (
-                allowed
                 and device.always_off_above_eur_mwh is not None
                 and cost >= device.always_off_above_eur_mwh
             ):
@@ -409,6 +484,31 @@ def build_plans(
                 )
                 else cost
             )
+        if device.always_on_below_eur_mwh is not None:
+            min_on_slots = max(1, round(device.min_on_hours * slots_per_hour))
+            for index, hour in enumerate(hours):
+                block = hours[index : index + min_on_slots]
+                if len(block) != min_on_slots:
+                    continue
+                if hour.start.minute % device.planning_step_minutes:
+                    continue
+                if any(
+                    slot.start.date() not in device_targets
+                    or not is_in_window(slot.start, device.window_start, device.window_end)
+                    for slot in block
+                ):
+                    continue
+                if any(
+                    left.end.timestamp() != right.start.timestamp()
+                    for left, right in zip(block, block[1:], strict=False)
+                ):
+                    continue
+                block_cost = (
+                    sum(priced[index + offset][0] for offset in range(min_on_slots)) / min_on_slots
+                )
+                if block_cost <= device.always_on_below_eur_mwh:
+                    for slot in block:
+                        always_on_forced[slot.start.timestamp()] = True
         for day, requested in device_targets.items():
             available_indices = [
                 index
@@ -422,12 +522,12 @@ def build_plans(
                     priced[index][0] < device.always_off_above_eur_mwh
                     for index in available_indices
                 )
-                safety_minimum = int((minimum_targets or {}).get(device.device_id, {}).get(day, 0))
+                safety_minimum = int(device_minimum_targets.get(day, 0))
                 target = max(safety_minimum, min(target, below_maximum))
             always_on_count = sum(
                 hours[index].start.timestamp() in always_on_forced for index in available_indices
             )
-            safety_minimum = int((minimum_targets or {}).get(device.device_id, {}).get(day, 0))
+            safety_minimum = int(device_minimum_targets.get(day, 0))
             mandatory_targets[day] = min(
                 len(available_indices), max(safety_minimum, always_on_count)
             )
@@ -443,6 +543,7 @@ def build_plans(
             adjusted_targets,
             device,
             device_forced,
+            (initial_states or {}).get(device.device_id),
         )
         if sequence is None and maximum_price_forced:
             # Weather demand is discretionary above the configured maximum
@@ -455,6 +556,7 @@ def build_plans(
                 adjusted_targets,
                 device,
                 device_forced,
+                (initial_states or {}).get(device.device_id),
             )
         if sequence is None and maximum_price_forced:
             # The daily safety minimum, an explicit always-ON threshold, or an
@@ -467,6 +569,7 @@ def build_plans(
                 adjusted_targets,
                 device,
                 device_forced,
+                (initial_states or {}).get(device.device_id),
             )
         if sequence is None and (always_on_forced or maximum_price_forced):
             # A forced cheap hour can require adjacent runtime to satisfy the
@@ -499,6 +602,7 @@ def build_plans(
                         expanded,
                         device,
                         device_forced,
+                        (initial_states or {}).get(device.device_id),
                     )
                     if sequence is not None:
                         adjusted_targets = expanded
@@ -507,12 +611,17 @@ def build_plans(
         if sequence is None:
             result[device.device_id] = DevicePlan(
                 device_id=device.device_id,
-                target_hours=adjusted_targets,
+                target_hours={
+                    day: value / slots_per_hour for day, value in adjusted_targets.items()
+                },
                 valid=False,
                 error="constraints_unsatisfiable",
             )
             continue
-        plan = DevicePlan(device_id=device.device_id, target_hours=adjusted_targets)
+        plan = DevicePlan(
+            device_id=device.device_id,
+            target_hours={day: value / slots_per_hour for day, value in adjusted_targets.items()},
+        )
         for hour, active, (cost, potential_solar) in zip(hours, sequence, priced, strict=True):
             allocated = potential_solar if active else 0.0
             if active:
@@ -520,6 +629,7 @@ def build_plans(
             plan.hours.append(
                 PlannedHour(
                     start=hour.start,
+                    end=hour.end,
                     active=active,
                     effective_eur_mwh=cost,
                     import_eur_mwh=hour.import_eur_mwh,

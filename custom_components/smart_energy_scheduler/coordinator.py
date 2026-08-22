@@ -49,6 +49,7 @@ from .const import (
     CONF_NETWORK_INCLUDES_VAT,
     CONF_NETWORK_NIGHT,
     CONF_NOMINAL_POWER_W,
+    CONF_PLANNING_STEP_MINUTES,
     CONF_POWER_MULTIPLIER,
     CONF_POWER_SENSOR,
     CONF_PREHEAT_HOURS,
@@ -84,6 +85,7 @@ from .engine import (
     aggregate_hourly,
     apply_solar_window_fallback,
     build_plans,
+    distribute_hour_energy,
     forecast_window_average,
     is_in_window,
     legacy_wind_chill,
@@ -91,6 +93,7 @@ from .engine import (
     output_should_be_on,
     parse_datetime,
     parse_nordpool_response,
+    price_intervals,
     weather_target_hours,
 )
 from .models import DevicePlan, DeviceRuntimeState, HourPrice, PlanningDevice, TariffConfig
@@ -172,6 +175,14 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     else None
                 ),
                 locked_active=None if source_changed else raw.get("locked_active"),
+                cycle_started_at=(
+                    None
+                    if source_changed
+                    else parse_datetime(raw["cycle_started_at"])
+                    if raw.get("cycle_started_at")
+                    else None
+                ),
+                cycle_active=None if source_changed else raw.get("cycle_active"),
             )
 
     async def async_save_state(self) -> None:
@@ -196,6 +207,10 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                         if state.locked_hour_start
                         else None,
                         "locked_active": state.locked_active,
+                        "cycle_started_at": state.cycle_started_at.isoformat()
+                        if state.cycle_started_at
+                        else None,
+                        "cycle_active": state.cycle_active,
                     }
                     for device_id, state in self.states.items()
                 }
@@ -229,6 +244,16 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             weekend_night=bool(data[CONF_WEEKEND_NIGHT]),
             network_includes_vat=bool(data.get(CONF_NETWORK_INCLUDES_VAT, False)),
             holiday_country=str(data.get(CONF_AREA) or "").upper() or None,
+        )
+
+    @staticmethod
+    def _grid_start(moment: datetime, step_minutes: int) -> datetime:
+        """Floor a local timestamp to the configured switching grid."""
+        step = 15 if int(step_minutes) == 15 else 60
+        return moment.replace(
+            minute=(moment.minute // step) * step,
+            second=0,
+            microsecond=0,
         )
 
     async def _async_fetch_prices(self, day: date) -> Any:
@@ -347,13 +372,14 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     continue
                 quarters.extend(parsed)
             unique_quarters = {(quarter.start, quarter.end): quarter for quarter in quarters}
-            hours = aggregate_hourly(unique_quarters.values(), self._tariff(), self.timezone)
+            tariff = self._tariff()
+            hours = aggregate_hourly(unique_quarters.values(), tariff, self.timezone)
+            price_slots = price_intervals(unique_quarters.values(), tariff, self.timezone)
             # Expose both local calendar days so the chart starts at today's
             # midnight. Planning still only receives current/future hours.
-            floor_now = now.replace(minute=0, second=0, microsecond=0)
-            horizon_start = floor_now.timestamp()
             planning_days = {now.date(), now.date() + timedelta(days=1)}
             hours = [hour for hour in hours if hour.start.date() in planning_days]
+            price_slots = [slot for slot in price_slots if slot.start.date() in planning_days]
             if not hours:
                 raise RuntimeError("Nord Pool returned no usable price slots")
             tomorrow = now.date() + timedelta(days=1)
@@ -365,16 +391,28 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                 (tomorrow_end.timestamp() - tomorrow_start.timestamp()) / 3600
             )
             received_tomorrow_hours = sum(hour.start.date() == tomorrow for hour in hours)
-            if received_tomorrow_hours != expected_tomorrow_hours:
+            expected_tomorrow_slots = expected_tomorrow_hours * 4
+            received_tomorrow_slots = sum(slot.start.date() == tomorrow for slot in price_slots)
+            if (
+                received_tomorrow_hours != expected_tomorrow_hours
+                or received_tomorrow_slots != expected_tomorrow_slots
+            ):
                 hours = [hour for hour in hours if hour.start.date() != tomorrow]
+                price_slots = [slot for slot in price_slots if slot.start.date() != tomorrow]
                 if "next_day_prices_pending" not in warnings:
                     warnings.append("next_day_prices_pending")
-            planning_hours = [
-                hour
-                for hour in hours
-                if horizon_start <= hour.start.timestamp() < horizon_start + 48 * 3600
+            floor_quarter = now.replace(
+                minute=(now.minute // 15) * 15,
+                second=0,
+                microsecond=0,
+            )
+            planning_start = floor_quarter.timestamp()
+            planning_slots = [
+                slot
+                for slot in price_slots
+                if planning_start <= slot.start.timestamp() < planning_start + 48 * 3600
             ]
-            if not planning_hours:
+            if not planning_slots:
                 raise RuntimeError("Nord Pool returned no future price slots")
         except Exception as err:  # noqa: BLE001 - input failure is represented in HA
             _LOGGER.warning("Unable to build price horizon: %s", err)
@@ -391,6 +429,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             warnings.append(f"solar_forecast_error: {err}")
             solar_missing = True
         merge_solar_forecast(hours, solar, float(self.entry.data[CONF_BASE_LOAD_W]))
+        distribute_hour_energy(hours, price_slots)
         solar_source = "price_only" if solar_missing else "forecast"
 
         try:
@@ -406,11 +445,11 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             warnings.append(f"weather_forecast_error: {err}")
 
         planning_devices: list[PlanningDevice] = []
-        targets: dict[str, dict[date, int]] = {}
-        minimum_targets: dict[str, dict[date, int]] = {}
+        targets: dict[str, dict[date, float]] = {}
+        minimum_targets: dict[str, dict[date, float]] = {}
         required_hours: dict[str, dict[date, int]] = {}
         apparent_temperatures: dict[str, dict[date, float]] = {}
-        available_days = sorted({hour.start.date() for hour in planning_hours})
+        available_days = sorted({slot.start.date() for slot in planning_slots})
         for subentry in self.device_subentries:
             data = subentry.data
             device_id = subentry.subentry_id
@@ -441,6 +480,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     min_on_hours=int(data[CONF_MIN_ON_HOURS]),
                     min_off_hours=int(data[CONF_MIN_OFF_HOURS]),
                     solar_priority=int(data[CONF_SOLAR_PRIORITY]),
+                    planning_step_minutes=int(data.get(CONF_PLANNING_STEP_MINUTES, 60)),
                     always_on_below_eur_mwh=(
                         float(data[CONF_ALWAYS_ON_BELOW]) if CONF_ALWAYS_ON_BELOW in data else None
                     ),
@@ -451,10 +491,11 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     ),
                 )
             )
-            target_by_day: dict[date, int] = {}
-            minimum_by_day: dict[date, int] = {}
+            target_by_day: dict[date, float] = {}
+            minimum_by_day: dict[date, float] = {}
             required_by_day: dict[date, int] = {}
             apparent_by_day: dict[date, float] = {}
+            planning_step = int(data.get(CONF_PLANNING_STEP_MINUTES, 60))
             for day in available_days:
                 apparent = (
                     forecast_window_average(
@@ -481,27 +522,57 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     float(data[CONF_MAX_HOURS]),
                 )
                 required_by_day[day] = target
-                actual = self.states[device_id].actual_hours_by_day.get(day.isoformat(), 0.0)
-                available = sum(
-                    is_in_window(hour.start, window_start, window_end)
-                    for hour in planning_hours
-                    if hour.start.date() == day
-                )
-                remaining = max(0, round(target - actual)) if day == now.date() else target
-                minimum = round(float(data[CONF_MIN_HOURS]))
-                minimum_remaining = (
-                    max(0, round(minimum - actual)) if day == now.date() else minimum
-                )
                 state = self.states[device_id]
-                current_hour = now.replace(minute=0, second=0, microsecond=0)
+                actual = state.actual_hours_by_day.get(day.isoformat(), 0.0)
+                active_now = state.cycle_active
+                if active_now is None:
+                    active_now = self._observed_active(subentry)
+                current_grid = self._grid_start(now, planning_step)
+                partial_grid_remaining = max(
+                    0.25,
+                    (current_grid.timestamp() + planning_step * 60 - floor_quarter.timestamp())
+                    / 3600,
+                )
+                planning_quantum_h = (
+                    0.25
+                    if planning_step == 15 or (bool(active_now) and floor_quarter.minute != 0)
+                    else 1.0
+                )
+
+                def quantize_remaining(
+                    required: float,
+                    observed: float = actual,
+                    step: int = planning_step,
+                    active: bool = bool(active_now),
+                    floor_minute: int = floor_quarter.minute,
+                    grid_remaining: float = partial_grid_remaining,
+                    quantum: float = planning_quantum_h,
+                ) -> float:
+                    raw = max(0.0, required - observed)
+                    if step == 60 and active and floor_minute != 0:
+                        return max(
+                            grid_remaining,
+                            grid_remaining + round(raw - grid_remaining),
+                        )
+                    return max(0, round(raw / quantum) * quantum)
+
+                available = sum(
+                    (slot.end - slot.start).total_seconds() / 3600
+                    for slot in planning_slots
+                    if slot.start.date() == day
+                    and is_in_window(slot.start, window_start, window_end)
+                )
+                remaining = quantize_remaining(target) if day == now.date() else target
+                minimum = round(float(data[CONF_MIN_HOURS]))
+                minimum_remaining = quantize_remaining(minimum) if day == now.date() else minimum
                 if (
                     day == now.date()
                     and not shadow_mode
                     and state.locked_active
                     and state.locked_hour_start is not None
-                    and state.locked_hour_start.timestamp() == current_hour.timestamp()
+                    and state.locked_hour_start.timestamp() == current_grid.timestamp()
                 ):
-                    remaining = max(1, remaining)
+                    remaining = max(partial_grid_remaining, remaining)
                 target_by_day[day] = min(remaining, available)
                 minimum_by_day[day] = min(minimum_remaining, available)
             targets[device_id] = target_by_day
@@ -528,6 +599,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     float(self.entry.data.get(CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H, 2)),
                 )
                 if fallback_hours:
+                    distribute_hour_energy(hours, price_slots)
                     solar_source = "fallback"
                     warnings.append("solar_fallback_active")
                 else:
@@ -537,25 +609,46 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
         elif solar_missing:
             warnings.append("solar_fallback_disabled")
 
-        current_hour = now.replace(minute=0, second=0, microsecond=0)
         forced_states: dict[str, dict[float, bool]] = {}
+        initial_states: dict[str, tuple[bool, int]] = {}
         if not shadow_mode:
             for subentry in self.device_subentries:
                 state = self.states[subentry.subentry_id]
+                planning_step = int(subentry.data.get(CONF_PLANNING_STEP_MINUTES, 60))
+                current_grid = self._grid_start(now, planning_step)
                 if (
                     state.locked_hour_start is not None
                     and state.locked_active is not None
-                    and state.locked_hour_start.timestamp() == current_hour.timestamp()
+                    and state.locked_hour_start.timestamp() == current_grid.timestamp()
                 ):
                     forced_states[subentry.subentry_id] = {
-                        current_hour.timestamp(): state.locked_active
+                        slot.start.timestamp(): state.locked_active
+                        for slot in planning_slots
+                        if current_grid.timestamp()
+                        <= slot.start.timestamp()
+                        < current_grid.timestamp() + planning_step * 60
                     }
+                active = state.cycle_active
+                if active is None:
+                    active = self._observed_active(subentry)
+                if active is not None:
+                    completed_slots = 0
+                    if state.cycle_started_at is not None:
+                        completed_slots = max(
+                            0,
+                            int(
+                                (floor_quarter.timestamp() - state.cycle_started_at.timestamp())
+                                // (15 * 60)
+                            ),
+                        )
+                    initial_states[subentry.subentry_id] = (active, completed_slots)
         plans = build_plans(
-            planning_hours,
+            planning_slots,
             planning_devices,
             targets,
             forced_states,
             minimum_targets,
+            initial_states,
         )
         for subentry in self.device_subentries:
             plan = plans.get(subentry.subentry_id)
@@ -574,15 +667,18 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             plan.required_hours = required_hours.get(device_id, {})
             plan.apparent_temperatures = apparent_temperatures.get(device_id, {})
             state.next_transition = self._next_transition_in_plan(plan, now)
+            subentry = next(
+                item for item in self.device_subentries if item.subentry_id == device_id
+            )
+            current_grid = self._grid_start(
+                now, int(subentry.data.get(CONF_PLANNING_STEP_MINUTES, 60))
+            )
             if not shadow_mode and (
                 state.locked_hour_start is None
-                or state.locked_hour_start.timestamp() != current_hour.timestamp()
+                or state.locked_hour_start.timestamp() != current_grid.timestamp()
             ):
-                for hour in plan.hours:
-                    if hour.start.timestamp() == current_hour.timestamp():
-                        state.locked_hour_start = current_hour
-                        state.locked_active = hour.active
-                        break
+                state.locked_hour_start = current_grid
+                state.locked_active = plan.active_at(now)
         data = SchedulerData(
             generated_at=now,
             hours=hours,
@@ -642,6 +738,9 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                             + (segment_end - cursor).total_seconds() / 3600
                         )
                         cursor = segment_end
+            if active is not None and active != state.last_active:
+                state.cycle_started_at = now
+                state.cycle_active = active
             state.last_active = active
             state.last_accounted_at = now
             cutoff = now.date() - timedelta(days=7)
@@ -653,14 +752,11 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
         await self.async_save_state()
 
     def planned_active(self, device_id: str, moment: datetime | None = None) -> bool | None:
-        """Return the plan state for the absolute current hour."""
+        """Return the plan state for the interval containing the moment."""
         if not self.data or (plan := self.data.plans.get(device_id)) is None:
             return None
         moment = (moment or dt_util.now()).astimezone(self.timezone)
-        for hour in plan.hours:
-            if hour.start.timestamp() <= moment.timestamp() < hour.start.timestamp() + 3600:
-                return hour.active
-        return None
+        return plan.active_at(moment)
 
     async def async_apply_outputs(self) -> None:
         """Apply plan/override safely; never issue toggle commands."""
@@ -698,8 +794,9 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                             state.reason = "failure_keep"
                             continue
                         if not self.entry.data[CONF_SHADOW_MODE]:
-                            current_hour = now.replace(minute=0, second=0, microsecond=0)
-                            state.locked_hour_start = current_hour
+                            state.locked_hour_start = self._grid_start(
+                                now, int(data.get(CONF_PLANNING_STEP_MINUTES, 60))
+                            )
                             state.locked_active = desired
                 state.reason = "shadow_" + reason if self.entry.data[CONF_SHADOW_MODE] else reason
                 state.next_transition = self._next_transition(subentry.subentry_id, now)
@@ -730,6 +827,12 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             {"entity_id": target},
             blocking=True,
         )
+        state = self.states[subentry.subentry_id]
+        now = dt_util.now().astimezone(self.timezone)
+        state.cycle_started_at = now
+        state.cycle_active = active
+        state.last_accounted_at = now
+        state.last_active = active
 
     def _next_transition(self, device_id: str, now: datetime) -> datetime | None:
         if not self.data or (plan := self.data.plans.get(device_id)) is None:
@@ -799,6 +902,9 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                         CONF_BASE_HOURS: float(subentry.data[CONF_BASE_HOURS]),
                         CONF_MIN_HOURS: float(subentry.data[CONF_MIN_HOURS]),
                         CONF_MAX_HOURS: float(subentry.data[CONF_MAX_HOURS]),
+                        CONF_PLANNING_STEP_MINUTES: int(
+                            subentry.data.get(CONF_PLANNING_STEP_MINUTES, 60)
+                        ),
                         CONF_ALWAYS_ON_BELOW: (
                             float(subentry.data[CONF_ALWAYS_ON_BELOW])
                             if CONF_ALWAYS_ON_BELOW in subentry.data

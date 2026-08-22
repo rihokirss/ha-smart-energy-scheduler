@@ -41,6 +41,7 @@ CONF_WINDOW_END = "window_end"
 CONF_BASE_HOURS = "base_hours"
 CONF_MIN_HOURS = "min_hours"
 CONF_MAX_HOURS = "max_hours"
+CONF_PLANNING_STEP_MINUTES = "planning_step_minutes"
 CONF_ALWAYS_ON_BELOW = "always_on_below_eur_mwh"
 CONF_ALWAYS_OFF_ABOVE = "always_off_above_eur_mwh"
 CONF_ALWAYS_ON_BELOW_ENABLED = "always_on_below_enabled"
@@ -96,6 +97,7 @@ DEFAULT_HEAT_PUMP = {
     CONF_BASE_HOURS: 9.0,
     CONF_MIN_HOURS: 3.0,
     CONF_MAX_HOURS: 24.0,
+    CONF_PLANNING_STEP_MINUTES: 60,
     CONF_MIN_ON_HOURS: 1,
     CONF_MIN_OFF_HOURS: 1,
     CONF_USE_WEATHER: True,

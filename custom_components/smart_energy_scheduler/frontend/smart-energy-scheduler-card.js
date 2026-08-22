@@ -79,6 +79,70 @@ class SmartEnergySchedulerCard extends HTMLElement {
     return new Intl.DateTimeFormat(locale.language, options).format(date);
   }
 
+  _formatClock(date) {
+    const locale = this._hass?.locale || {};
+    const options = { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
+    if (locale.time_zone === "server" && this._hass?.config?.time_zone) {
+      options.timeZone = this._hass.config.time_zone;
+    }
+    return new Intl.DateTimeFormat(locale.language, options).format(date);
+  }
+
+  _overlappingSlots(device, hour) {
+    const start = new Date(hour.start).getTime();
+    const end = new Date(hour.end || start + 3600000).getTime();
+    return (device.plan?.hours || []).filter((slot) => {
+      const slotStart = new Date(slot.start).getTime();
+      const slotEnd = new Date(slot.end || slotStart + 3600000).getTime();
+      return slotStart < end && slotEnd > start;
+    });
+  }
+
+  _effectiveForHour(device, hour) {
+    const slots = this._overlappingSlots(device, hour);
+    if (!slots.length) return hour.import_eur_mwh;
+    let weighted = 0, duration = 0;
+    slots.forEach((slot) => {
+      const start = new Date(slot.start).getTime();
+      const end = new Date(slot.end || start + 3600000).getTime();
+      const milliseconds = Math.max(0, end - start);
+      weighted += Number(slot.effective_eur_mwh) * milliseconds;
+      duration += milliseconds;
+    });
+    return duration ? weighted / duration : hour.import_eur_mwh;
+  }
+
+  _plannedRanges(device, hour) {
+    const slots = this._overlappingSlots(device, hour).filter((slot) => slot.active);
+    const ranges = [];
+    slots.forEach((slot) => {
+      const start = new Date(slot.start).getTime();
+      const end = new Date(slot.end || start + 3600000).getTime();
+      const previous = ranges.at(-1);
+      if (previous && previous[1] === start) previous[1] = end;
+      else ranges.push([start, end]);
+    });
+    return ranges.map(([start, end]) =>
+      `${this._formatClock(new Date(start))}–${this._formatClock(new Date(end))}`
+    ).join(", ");
+  }
+
+  _planGradient(device, hour) {
+    const hourStart = new Date(hour.start).getTime();
+    const hourEnd = new Date(hour.end || hourStart + 3600000).getTime();
+    const duration = Math.max(1, hourEnd - hourStart);
+    const stops = [];
+    this._overlappingSlots(device, hour).forEach((slot) => {
+      const start = Math.max(hourStart, new Date(slot.start).getTime());
+      const end = Math.min(hourEnd, new Date(slot.end || start + 3600000).getTime());
+      const left = (start - hourStart) / duration * 100;
+      const right = (end - hourStart) / duration * 100;
+      const color = slot.active ? "var(--primary-color,#03a9f4)" : "var(--divider-color,#ddd)";
+      stops.push(`${color} ${left}%`, `${color} ${right}%`);
+    });
+    return stops.length ? `linear-gradient(to right,${stops.join(",")})` : "var(--divider-color,#ddd)";
+  }
+
   async _override(deviceId, mode) {
     const data = { device_id: deviceId, mode, entry_id: this.data.entry_id };
     if (mode !== "auto") data.until = new Date(Date.now() + 2 * 3600000).toISOString();
@@ -138,10 +202,9 @@ class SmartEnergySchedulerCard extends HTMLElement {
       </div>`;
     }).join("");
     const devices = Object.entries(this.data.devices || {}).map(([id, device]) => {
-      const planned = new Map((device.plan?.hours || []).map((h) => [h.start, h]));
       const blocks = hours.map((h) => {
-        const slot = planned.get(h.start);
-        return `<div class="block ${slot?.active ? "active" : ""}" title="${this._escape(slot?.reason || "off")}"></div>`;
+        const ranges = this._plannedRanges(device, h);
+        return `<div class="block" style="background:${this._planGradient(device, h)}" title="${this._escape(ranges ? `Planeeritud ON ${ranges}` : "Planeeritud OFF")}"></div>`;
       }).join("");
       const actual = Object.values(device.state.actual_hours_by_day || {}).slice(-1)[0] || 0;
       return `<section class="device">
@@ -222,6 +285,7 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
     let state = null;
     let cursor = start;
     let activeMs = 0;
+    const segments = [];
     for (const event of events) {
       const stamp = Number(event.lu ?? event.lc) * 1000 || Date.parse(event.last_changed || "");
       const eventState = event.s ?? event.state;
@@ -231,12 +295,18 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
         continue;
       }
       if (stamp >= end) break;
-      if (this._historyStateActive(state, device)) activeMs += stamp - cursor;
+      if (this._historyStateActive(state, device)) {
+        activeMs += stamp - cursor;
+        segments.push([cursor, stamp]);
+      }
       cursor = stamp;
       state = eventState;
     }
-    if (this._historyStateActive(state, device)) activeMs += Math.max(0, end - cursor);
-    return state === null ? null : { active: activeMs > 0, minutes: activeMs / 60000 };
+    if (this._historyStateActive(state, device)) {
+      activeMs += Math.max(0, end - cursor);
+      segments.push([cursor, end]);
+    }
+    return state === null ? null : { active: activeMs > 0, minutes: activeMs / 60000, segments };
   }
 
   _historyStateActive(state, device) {
@@ -260,10 +330,11 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
     const [deviceId, device] = selected;
     const count = Math.max(1, Math.min(48, Number(this.config.hours) || 48));
     const hours = (this.data.hours || []).slice(0, count);
-    const planned = new Map((device.plan?.hours || []).map((slot) => [slot.start, slot]));
     const values = hours.flatMap((hour) => {
-      const effective = planned.get(hour.start)?.effective_eur_mwh;
-      return Number.isFinite(effective) ? [hour.import_eur_mwh, effective] : [hour.import_eur_mwh];
+      const slotValues = this._overlappingSlots(device, hour)
+        .map((slot) => Number(slot.effective_eur_mwh))
+        .filter(Number.isFinite);
+      return [hour.import_eur_mwh, ...slotValues];
     });
     const minimum = Math.min(0, ...values);
     const maximum = Math.max(1, ...values);
@@ -277,33 +348,58 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
     const baseline = y(0);
     const now = Date.now();
     const bars = hours.map((hour, index) => {
-      const slot = planned.get(hour.start);
       const start = new Date(hour.start).getTime();
-      const historical = start + 3600000 <= now;
-      const actual = historical ? this._actualActivity(hour, device) : null;
-      const active = historical ? Boolean(actual?.active) : Boolean(slot?.active);
+      const end = new Date(hour.end || start + 3600000).getTime();
+      const historical = end <= now;
+      const actual = start < now ? this._actualActivity(hour, device) : null;
+      const planSlots = this._overlappingSlots(device, hour);
       const barWidth = Math.max(3, step * .86);
       const x = left + index * step + (step - barWidth) / 2;
       const valueY = y(hour.import_eur_mwh);
       const rectY = Math.min(valueY, baseline);
       const rectHeight = Math.max(1, Math.abs(baseline - valueY));
-      const current = start <= now && now < start + 3600000;
+      const current = start <= now && now < end;
+      const plannedRanges = this._plannedRanges(device, hour);
       const status = historical
         ? (actual?.active ? `Tegelikult ON (${actual.minutes.toFixed(0)} min)` : "Tegelikult OFF")
-        : (active ? "Planeeritud ON" : "Planeeritud OFF");
-      const fill = historical
-        ? (actual?.active ? "#157347" : "#9e9e9e")
-        : (active ? "#25a244" : "#f59e0b");
-      const tooltip = `${new Date(hour.start).toLocaleString()}\n${status}\nOstuhind ${hour.import_eur_mwh.toFixed(1)} €/MWh\nEfektiivhind ${(slot?.effective_eur_mwh ?? hour.import_eur_mwh).toFixed(1)} €/MWh\nPV ${(hour.pv_wh / 1000).toFixed(2)} kWh`;
+        : (plannedRanges ? `Planeeritud ON ${plannedRanges}` : "Planeeritud OFF");
+      const tooltip = `${new Date(hour.start).toLocaleString()}\n${status}\nOstuhind ${hour.import_eur_mwh.toFixed(1)} €/MWh\nEfektiivhind ${this._effectiveForHour(device, hour).toFixed(1)} €/MWh\nPV ${(hour.pv_wh / 1000).toFixed(2)} kWh`;
+      const segmentRect = (segmentStart, segmentEnd, fill) => {
+        const clippedStart = Math.max(start, segmentStart);
+        const clippedEnd = Math.min(end, segmentEnd);
+        if (clippedEnd <= clippedStart) return "";
+        const segmentX = x + (clippedStart - start) / (end - start) * barWidth;
+        const segmentWidth = Math.max(.6, (clippedEnd - clippedStart) / (end - start) * barWidth);
+        return `<rect x="${segmentX}" y="${rectY}" width="${segmentWidth}" height="${rectHeight}" fill="${fill}"/>`;
+      };
+      const actualSegments = (actual?.segments || []).map(([from, to]) =>
+        segmentRect(from, to, "#157347")
+      ).join("");
+      const plannedSegments = planSlots.map((slot) => {
+        const slotStart = Math.max(now, new Date(slot.start).getTime());
+        const slotEnd = new Date(slot.end || slotStart + 3600000).getTime();
+        return segmentRect(slotStart, slotEnd, slot.active ? "#25a244" : "#f59e0b");
+      }).join("");
       const markerX = left + index * step + step / 2;
       const marker = current
         ? `<path class="current-marker" d="M ${markerX - 6} ${top + 2} H ${markerX + 6} L ${markerX} ${top + 12} Z"><title>Praegune tund</title></path>`
         : "";
-      return `<rect x="${x}" y="${rectY}" width="${barWidth}" height="${rectHeight}" rx="2" fill="${fill}"><title>${this._escape(tooltip)}</title></rect>${marker}`;
+      return `<g><title>${this._escape(tooltip)}</title><rect x="${x}" y="${rectY}" width="${barWidth}" height="${rectHeight}" rx="2" fill="${start < now ? "#9e9e9e" : "#f59e0b"}"/>${actualSegments}${plannedSegments}</g>${marker}`;
     }).join("");
-    const points = hours.map((hour, index) => {
-      const effective = planned.get(hour.start)?.effective_eur_mwh ?? hour.import_eur_mwh;
-      return `${left + index * step + step / 2},${y(effective)}`;
+    const points = hours.flatMap((hour, index) => {
+      const hourStart = new Date(hour.start).getTime();
+      const hourEnd = new Date(hour.end || hourStart + 3600000).getTime();
+      const slots = this._overlappingSlots(device, hour);
+      if (!slots.length) {
+        return [`${left + index * step + step / 2},${y(hour.import_eur_mwh)}`];
+      }
+      return slots.map((slot) => {
+        const slotStart = new Date(slot.start).getTime();
+        const slotEnd = new Date(slot.end || slotStart + 3600000).getTime();
+        const midpoint = (slotStart + slotEnd) / 2;
+        const x = left + index * step + (midpoint - hourStart) / (hourEnd - hourStart) * step;
+        return `${x},${y(Number(slot.effective_eur_mwh))}`;
+      });
     }).join(" ");
     const grid = [0, .25, .5, .75, 1].map((ratio) => {
       const lineY = top + ratio * plotHeight;
@@ -453,6 +549,7 @@ class SmartEnergyHeatingCurveCard extends SmartEnergySchedulerCard {
       ["hours_per_degree", "Mõju kraadi kohta", 0, 5, .1, "h/°C"],
       ["min_hours", "Miinimum", 0, 25, 1, "h"],
       ["max_hours", "Maksimum", 0, 25, 1, "h"],
+      ["planning_step_minutes", "Planeerimise samm", 15, 60, 45, "min"],
       ["weather_lookahead_hours", "Keskmistamise aken", 1, 48, 1, "h"],
       ["preheat_hours", "Prognoosiakna nihe tulevikku", 0, 24, 1, "h"],
     ].map(([key, label, min, max, step, unit]) => {
@@ -478,7 +575,7 @@ class SmartEnergyHeatingCurveCard extends SmartEnergySchedulerCard {
       <div class="chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Küttekõver: töötunnid sõltuvalt näivast välistemperatuurist">${horizontalGrid}${verticalGrid}<polyline points="${curve.join(" ")}" fill="none" stroke="#2196f3" stroke-width="4" stroke-linejoin="round"/>${forecastPoints}</svg></div>
       <div class="note">RealFeel-keskmine: ${Number(settings.weather_lookahead_hours)} h prognoosiaken, algus ${Number(settings.preheat_hours)} h ettepoole. Oranž/lilla punkt näitab prognoosist arvutatud vajadust.</div>
       <div class="settings">${fields}${priceFields}${realFeelMode}</div>
-      <div class="note">Hinnapiirid kasutavad seadme efektiivhinda koos tariifide, käibemaksu ja PV prognoosiga. Päeva miinimumtunnid võivad alati-väljas piiri ohutuse huvides ületada.</div>
+      <div class="note">Planeerimise samm 15 min lubab algusi :00/:15/:30/:45; 60 min lubab ainult täistunde. Minimaalne ON/OFF kestus jääb tundidesse. Hinnapiirid kasutavad seadme efektiivhinda koos tariifide, käibemaksu ja PV prognoosiga. Päeva miinimumtunnid võivad alati-väljas piiri ohutuse huvides ületada.</div>
       <div class="actions"><ha-button class="save" variant="brand" appearance="filled">Rakenda ja arvuta plaan uuesti</ha-button><span class="save-status"></span></div>
     </ha-card>`;
     const legacySwitch = this.shadowRoot.querySelector("ha-switch[data-setting]");

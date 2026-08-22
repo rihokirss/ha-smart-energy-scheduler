@@ -69,6 +69,12 @@ update_device_settings:
           max: 25
           step: 1
           unit_of_measurement: h
+    planning_step_minutes:
+      selector:
+        select:
+          options:
+            - "15"
+            - "60"
     always_on_below_eur_mwh:
       selector:
         number:

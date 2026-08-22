@@ -11,6 +11,7 @@ from custom_components.smart_energy_scheduler.engine import (
     aggregate_hourly,
     apply_solar_window_fallback,
     build_plans,
+    distribute_hour_energy,
     forecast_window_average,
     is_day_tariff,
     is_estonian_public_holiday,
@@ -19,6 +20,7 @@ from custom_components.smart_energy_scheduler.engine import (
     month_in_range,
     output_should_be_on,
     parse_nordpool_response,
+    price_intervals,
     weather_target_hours,
 )
 from custom_components.smart_energy_scheduler.models import (
@@ -54,6 +56,19 @@ def quarter_series(start: datetime, count: int, price: float = 100.0):
         )
         for i in range(count)
     ]
+
+
+def test_hourly_solar_energy_is_distributed_over_quarter_slots() -> None:
+    start = datetime(2026, 8, 20, 10, tzinfo=TALLINN)
+    quarters = quarter_series(start, 4)
+    hours = aggregate_hourly(quarters, tariff(), TALLINN)
+    slots = price_intervals(quarters, tariff(), TALLINN)
+    merge_solar_forecast(hours, [{start.isoformat(): 4000}], 400)
+
+    distribute_hour_energy(hours, slots)
+
+    assert [slot.pv_wh for slot in slots] == [1000, 1000, 1000, 1000]
+    assert [slot.base_load_wh for slot in slots] == [100, 100, 100, 100]
 
 
 def test_parse_nordpool_multi_area_response() -> None:
@@ -330,7 +345,7 @@ def test_device_always_on_price_expands_daily_target() -> None:
 
 def test_always_on_price_expands_run_to_device_minimum() -> None:
     start = datetime(2026, 8, 20, tzinfo=TALLINN)
-    prices = (100, -10, 100)
+    prices = (100, -10, -10)
     hours = [
         HourPrice(
             start + timedelta(hours=i),
@@ -434,6 +449,112 @@ def test_daily_minimum_can_override_always_off_price() -> None:
     assert plan.valid
     assert [slot.active for slot in plan.hours] == [True, True, True]
     assert plan.hours[1].reason == "minimum_hours_override"
+
+
+def test_quarter_hour_device_selects_cheapest_rolling_hour() -> None:
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    prices = (100, 1, 1, 1, 1, 100, 100, 100)
+    slots = [
+        HourPrice(
+            start + timedelta(minutes=15 * i),
+            start + timedelta(minutes=15 * (i + 1)),
+            price,
+            price,
+            price,
+        )
+        for i, price in enumerate(prices)
+    ]
+    device = PlanningDevice("load", "Load", 1000, time(), time(), 1, 1, 1, planning_step_minutes=15)
+
+    plan = build_plans(slots, [device], {"load": {start.date(): 1}})["load"]
+
+    assert plan.valid
+    active = [slot.start for slot in plan.hours if slot.active]
+    assert active == [start + timedelta(minutes=15 * i) for i in range(1, 5)]
+
+
+def test_hour_grid_device_cannot_start_on_quarter_hour() -> None:
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    prices = (100, 1, 1, 1, 1, 100, 100, 100)
+    slots = [
+        HourPrice(
+            start + timedelta(minutes=15 * i),
+            start + timedelta(minutes=15 * (i + 1)),
+            price,
+            price,
+            price,
+        )
+        for i, price in enumerate(prices)
+    ]
+    device = PlanningDevice("load", "Load", 1000, time(), time(), 1, 1, 1, planning_step_minutes=60)
+
+    plan = build_plans(slots, [device], {"load": {start.date(): 1}})["load"]
+
+    assert plan.valid
+    active = [slot.start for slot in plan.hours if slot.active]
+    assert active == [start + timedelta(minutes=15 * i) for i in range(4)]
+
+
+def test_quarter_hour_maximum_price_rejects_an_extreme_inside_run() -> None:
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    prices = (1, 1, 500, 1, 1)
+    slots = [
+        HourPrice(
+            start + timedelta(minutes=15 * i),
+            start + timedelta(minutes=15 * (i + 1)),
+            price,
+            price,
+            price,
+        )
+        for i, price in enumerate(prices)
+    ]
+    device = PlanningDevice(
+        "load",
+        "Load",
+        1000,
+        time(),
+        time(),
+        1,
+        1,
+        1,
+        planning_step_minutes=15,
+        always_off_above_eur_mwh=100,
+    )
+
+    plan = build_plans(
+        slots,
+        [device],
+        {"load": {start.date(): 1}},
+        minimum_targets={"load": {start.date(): 0}},
+    )["load"]
+
+    assert plan.valid
+    assert not any(slot.active for slot in plan.hours)
+
+
+def test_quarter_hour_initial_run_is_not_restarted_on_recalculation() -> None:
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    slots = [
+        HourPrice(
+            start + timedelta(minutes=15 * i),
+            start + timedelta(minutes=15 * (i + 1)),
+            10,
+            10,
+            10,
+        )
+        for i in range(4)
+    ]
+    device = PlanningDevice("load", "Load", 1000, time(), time(), 1, 1, 1, planning_step_minutes=15)
+
+    plan = build_plans(
+        slots,
+        [device],
+        {"load": {start.date(): 0.5}},
+        initial_states={"load": (True, 2)},
+    )["load"]
+
+    assert plan.valid
+    assert [slot.active for slot in plan.hours] == [True, True, False, False]
 
 
 @pytest.mark.parametrize(

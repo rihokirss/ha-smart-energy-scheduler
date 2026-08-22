@@ -93,7 +93,7 @@ if (mode === "title") {
 
 if (mode === "add" || mode === "resource") {
   const resourceUrl = "/smart_energy_scheduler/smart-energy-scheduler-card.js";
-  const versionedResourceUrl = `${resourceUrl}?v=0.7.2`;
+  const versionedResourceUrl = `${resourceUrl}?v=0.8.0`;
   const resources = await call({ type: "lovelace/resources/list" });
   const existingResource = resources.find((resource) => resource.url.split("?")[0] === resourceUrl);
   if (!existingResource) {

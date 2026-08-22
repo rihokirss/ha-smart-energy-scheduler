@@ -92,6 +92,7 @@
             "base_hours": "Base hours per day",
             "min_hours": "Minimum hours per day",
           "max_hours": "Maximum hours per day",
+          "planning_step_minutes": "Allowed planning start times",
           "always_on_below_eur_mwh": "Always ON at or below effective price",
           "always_off_above_eur_mwh": "Always OFF at or above effective price",
           "min_on_hours": "Minimum consecutive ON hours",
@@ -123,6 +124,7 @@
             "base_hours": "Base hours per day",
             "min_hours": "Minimum hours per day",
           "max_hours": "Maximum hours per day",
+          "planning_step_minutes": "Allowed planning start times",
           "always_on_below_eur_mwh": "Always ON at or below effective price",
           "always_off_above_eur_mwh": "Always OFF at or above effective price",
           "min_on_hours": "Minimum consecutive ON hours",
@@ -149,6 +151,12 @@
     }
   },
   "selector": {
+    "planning_step_minutes": {
+      "options": {
+        "60": "Whole hours (:00)",
+        "15": "Quarter hours (:00/:15/:30/:45)"
+      }
+    },
     "failure_mode": {
       "options": {
         "force_on": "Force ON",

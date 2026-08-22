@@ -30,6 +30,9 @@ def test_price_plan_card_colors_device_on_hours() -> None:
     assert 'customElements.define("smart-energy-price-plan-card"' in source
     assert "Planeeritud ON" in source
     assert 'active ? "#25a244" : "#f59e0b"' in source
+    assert "_overlappingSlots(device, hour)" in source
+    assert "segmentRect(slotStart, slotEnd" in source
+    assert "new Date(slot.end" in source
 
 
 def test_price_plan_card_uses_ha_time_format_and_actual_history() -> None:
@@ -86,6 +89,8 @@ def test_scheduler_card_centers_current_hour_and_keeps_controls_visible() -> Non
     assert "current.offsetLeft + current.offsetWidth / 2 - scroll.clientWidth / 2" in source
     assert ".device-head{display:flex;justify-content:flex-start" in source
     assert "position:sticky;left:0" in source
+    assert "_planGradient(device, h)" in source
+    assert "_plannedRanges(device, h)" in source
 
 
 def test_price_plan_card_marks_current_hour_without_bar_outline() -> None:
@@ -127,5 +132,7 @@ def test_heating_curve_card_is_editable_and_shows_forecast_points() -> None:
     assert '"always_off_above_eur_mwh"' in source
     assert '"Alati sees hinnaga kuni", 0, 1000' in source
     assert '"Alati väljas hinnaga alates", 0, 1000' in source
+    assert '"planning_step_minutes", "Planeerimise samm", 15, 60, 45' in source
+    assert "15 min lubab algusi :00/:15/:30/:45" in source
     assert 'data-enable="${key}"' in source
     assert "Päeva miinimumtunnid võivad" in source

@@ -44,20 +44,25 @@ The same per-device card also edits two optional effective-price limits. “Alwa
 expand that device's daily target when the tariff-, VAT-, and PV-adjusted price is cheap.
 “Always OFF” caps the weather-derived target when the effective price is expensive, while
 the configured daily minimum remains a safety requirement and may override that cap.
+In quarter-hour mode the maximum limit rejects a candidate run containing an excessive
+quarter, while the always-ON limit evaluates the average of the complete minimum run.
 
-Past hours are dark green when HA history shows actual activity and grey when off.
-Future planned hours are green for ON and orange for OFF. The blue line is the
-device's effective price after forecast solar allocation. The current bar has an
-outline showing whether feedback says the device is actually active. The x-axis
-uses local whole-hour labels (`00`–`23`) in the Home Assistant time zone.
+Past activity is dark green at its actual history boundaries and future planned
+activity is green/orange at the configured 15- or 60-minute boundaries. The chart
+keeps readable whole-hour labels (`00`–`23`), while the blue effective-price line
+and colored bar segments can use quarter-hour detail.
 
 Keep shadow mode enabled for at least 48 hours. Compare the plan with actual conditions before enabling output control.
 
 ## Configuration layout
 
 - **Settings → Devices & services → Smart Energy Scheduler → Configure** contains the shared price, tax, network tariff, PV/base-load, weather-source, and shadow-mode settings.
-- **Settings → Devices & services → Smart Energy Scheduler → device row → Configure device** contains that device's target entity, inverted-output setting, feedback/power sensors, work window, daily hours, minimum ON/OFF times, weather adjustment, and failure behavior.
+- **Settings → Devices & services → Smart Energy Scheduler → device row → Configure device** contains that device's target entity, inverted-output setting, feedback/power sensors, work window, 15/60-minute planning step, daily hours, minimum ON/OFF times, weather adjustment, and failure behavior.
 - Use **Add controlled device** in the integration menu to create another independently scheduled target. Shared price and tariff settings are not duplicated per device.
+
+A 15-minute planning step allows starts at `:00/:15/:30/:45` without shortening
+minimum ON/OFF durations. For example, a heat pump may start at `02:15` and still
+run for at least 60 consecutive minutes. The 60-minute mode only starts on `:00`.
 
 ## Pricing model
 
@@ -68,7 +73,9 @@ Keep shadow mode enabled for at least 48 hours. Compare the plan with actual con
 - If Forecast.Solar is unavailable, the default fallback reproduces the previous YAML model: March–September, from three hours after sunrise until two hours before sunset. During that window the base load and configured controlled loads are treated as solar-covered. All fallback parameters are shared settings.
 - Outside the fallback window a missing PV forecast is treated as zero production; price-based planning remains valid and a warning is exposed.
 
-Every 15-minute price is tariffed using its own timestamp and then duration-weighted into absolute one-hour cycles. This preserves both repeated hours on the 25-hour DST day.
+Every 15-minute price is tariffed using its own timestamp. Devices can optimize those
+slots directly or restrict transitions to absolute one-hour cycles. This preserves both
+repeated hours on the 25-hour DST day.
 
 The default Estonian Elektrilevi **Võrk 2** values are 75.30 EUR/MWh by day
 and 43.50 EUR/MWh by night, already including VAT. The default VAT rate is

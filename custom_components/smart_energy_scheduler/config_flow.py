@@ -40,6 +40,7 @@ from .const import (
     CONF_NETWORK_INCLUDES_VAT,
     CONF_NETWORK_NIGHT,
     CONF_NOMINAL_POWER_W,
+    CONF_PLANNING_STEP_MINUTES,
     CONF_POWER_MULTIPLIER,
     CONF_POWER_SENSOR,
     CONF_PREHEAT_HOURS,
@@ -206,6 +207,16 @@ def _device_schema(defaults: dict[str, Any]) -> vol.Schema:
         ),
         vol.Required(CONF_MAX_HOURS, default=defaults.get(CONF_MAX_HOURS, 24.0)): _number(
             0, 25, 1, "h"
+        ),
+        vol.Required(
+            CONF_PLANNING_STEP_MINUTES,
+            default=str(defaults.get(CONF_PLANNING_STEP_MINUTES, 60)),
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=["60", "15"],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                translation_key="planning_step_minutes",
+            )
         ),
         vol.Optional(CONF_ALWAYS_ON_BELOW, default=defaults.get(CONF_ALWAYS_ON_BELOW)): _number(
             0, 1000, 1, "EUR/MWh"

@@ -92,6 +92,7 @@
             "base_hours": "Baastunnid päevas",
             "min_hours": "Minimaalsed tunnid päevas",
           "max_hours": "Maksimaalsed tunnid päevas",
+          "planning_step_minutes": "Lubatud planeerimise algusajad",
           "always_on_below_eur_mwh": "Alati sees selle efektiivhinnaga või alla",
           "always_off_above_eur_mwh": "Alati väljas selle efektiivhinnaga või üle",
           "min_on_hours": "Minimaalne järjestikune ON",
@@ -123,6 +124,7 @@
             "base_hours": "Baastunnid päevas",
             "min_hours": "Minimaalsed tunnid päevas",
           "max_hours": "Maksimaalsed tunnid päevas",
+          "planning_step_minutes": "Lubatud planeerimise algusajad",
           "always_on_below_eur_mwh": "Alati sees selle efektiivhinnaga või alla",
           "always_off_above_eur_mwh": "Alati väljas selle efektiivhinnaga või üle",
           "min_on_hours": "Minimaalne järjestikune ON",
@@ -149,6 +151,12 @@
     }
   },
   "selector": {
+    "planning_step_minutes": {
+      "options": {
+        "60": "Täistunnid (:00)",
+        "15": "Veerandtunnid (:00/:15/:30/:45)"
+      }
+    },
     "failure_mode": {
       "options": {
         "force_on": "Sund-ON",
