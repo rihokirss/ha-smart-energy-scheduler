@@ -131,6 +131,160 @@ for (const file of files) {
 }
 
 const check = await supervisor("/core/check", "post", {});
+let weatherModelUpdate = null;
+if (process.env.HA_UPDATE_WEATHER_MODEL === "1") {
+  const plans = await wsRequest({ type: "smart_energy_scheduler/get_plan" });
+  const plan = Array.isArray(plans) ? plans[0] : plans;
+  const deviceId = Object.keys(plan?.devices || {})[0];
+  if (!deviceId) throw new Error("No scheduler device found for weather-model update");
+  const settings = {
+    device_id: deviceId,
+    entry_id: plan.entry_id,
+    weather_lookahead_hours: 12,
+    preheat_hours: 0,
+    legacy_wind_chill: true,
+  };
+  await wsRequest({
+    type: "call_service",
+    domain: "smart_energy_scheduler",
+    service: "update_device_settings",
+    service_data: settings,
+  });
+  weatherModelUpdate = settings;
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+}
+let configurationMatches = null;
+if (process.env.HA_READ_CONFIG === "1") {
+  const configResponse = await fetch(
+    `${ingress}/api/file?filename=${encodeURIComponent("/homeassistant/configuration.yaml")}`,
+    { headers: { Authorization: `Bearer ${accessToken}`, Cookie: `ingress_session=${session}` } },
+  );
+  const configText = await configResponse.text();
+  const lines = configText.split("\n");
+  const indexes = lines
+    .map((line, index) => (/realfeel|apparent|forecast|prognoos|tuul|wind|soojuspump|sunrise|sunset|päikese|month|kuu/i.test(line) ? index : -1))
+    .filter((index) => index >= 0);
+  const selected = new Set();
+  indexes.forEach((index) => {
+    for (let line = Math.max(0, index - 12); line <= Math.min(lines.length - 1, index + 18); line++) {
+      selected.add(line);
+    }
+  });
+  configurationMatches = [...selected].sort((a, b) => a - b).map((index) => ({
+    line: index + 1,
+    text: /password|token|api[_-]?key|secret/i.test(lines[index])
+      ? `${lines[index].split(":")[0]}: <redacted>`
+      : lines[index],
+  }));
+}
+let tariffUpdate = null;
+if (process.env.HA_UPDATE_VORK2 === "1") {
+  const entriesResponse = await fetch(
+    `${ingress}/api/file?filename=${encodeURIComponent("/homeassistant/.storage/core.config_entries")}`,
+    { headers: { Authorization: `Bearer ${accessToken}`, Cookie: `ingress_session=${session}` } },
+  );
+  const entriesFile = JSON.parse(await entriesResponse.text());
+  const schedulerEntry = entriesFile.data.entries.find(
+    (entry) => entry.domain === "smart_energy_scheduler",
+  );
+  if (!schedulerEntry) throw new Error("Smart Energy Scheduler config entry was not found");
+  const startResponse = await fetch(`${baseUrl}/api/config/config_entries/flow`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      handler: "smart_energy_scheduler",
+      entry_id: schedulerEntry.entry_id,
+      show_advanced_options: true,
+    }),
+  });
+  const started = await startResponse.json();
+  if (!startResponse.ok || !started.flow_id) {
+    throw new Error(`Tariff reconfigure start failed: ${JSON.stringify(started)}`);
+  }
+  const updatedData = {
+    ...schedulerEntry.data,
+    vat: 24,
+    network_day: 75.3,
+    network_night: 43.5,
+    network_includes_vat: true,
+    day_start: "07:00:00",
+    day_end: "22:00:00",
+    weekend_night: true,
+    tariff_confirmed: true,
+  };
+  const updateResponse = await fetch(
+    `${baseUrl}/api/config/config_entries/flow/${started.flow_id}`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(updatedData),
+    },
+  );
+  const updated = await updateResponse.json();
+  if (!updateResponse.ok || updated.type !== "abort" || updated.reason !== "reconfigure_successful") {
+    throw new Error(`Tariff reconfigure failed: ${JSON.stringify(updated)}`);
+  }
+  tariffUpdate = {
+    network_day: updatedData.network_day,
+    network_night: updatedData.network_night,
+    network_includes_vat: updatedData.network_includes_vat,
+    vat: updatedData.vat,
+  };
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+}
+let solarFallbackUpdate = null;
+if (process.env.HA_UPDATE_SOLAR_FALLBACK === "1") {
+  const entriesResponse = await fetch(
+    `${ingress}/api/file?filename=${encodeURIComponent("/homeassistant/.storage/core.config_entries")}`,
+    { headers: { Authorization: `Bearer ${accessToken}`, Cookie: `ingress_session=${session}` } },
+  );
+  const entriesFile = JSON.parse(await entriesResponse.text());
+  const schedulerEntry = entriesFile.data.entries.find(
+    (entry) => entry.domain === "smart_energy_scheduler",
+  );
+  if (!schedulerEntry) throw new Error("Smart Energy Scheduler config entry was not found");
+  const startResponse = await fetch(`${baseUrl}/api/config/config_entries/flow`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      handler: "smart_energy_scheduler",
+      entry_id: schedulerEntry.entry_id,
+      show_advanced_options: true,
+    }),
+  });
+  const started = await startResponse.json();
+  if (!startResponse.ok || !started.flow_id) {
+    throw new Error(`Solar fallback reconfigure start failed: ${JSON.stringify(started)}`);
+  }
+  const updatedData = {
+    ...schedulerEntry.data,
+    solar_fallback_enabled: true,
+    solar_fallback_start_month: 3,
+    solar_fallback_end_month: 9,
+    solar_fallback_sunrise_delay_h: 3,
+    solar_fallback_sunset_advance_h: 2,
+  };
+  const updateResponse = await fetch(
+    `${baseUrl}/api/config/config_entries/flow/${started.flow_id}`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(updatedData),
+    },
+  );
+  const updated = await updateResponse.json();
+  if (!updateResponse.ok || updated.type !== "abort" || updated.reason !== "reconfigure_successful") {
+    throw new Error(`Solar fallback reconfigure failed: ${JSON.stringify(updated)}`);
+  }
+  solarFallbackUpdate = {
+    enabled: true,
+    start_month: 3,
+    end_month: 9,
+    sunrise_delay_h: 3,
+    sunset_advance_h: 2,
+  };
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+}
 let configFlow = null;
 if (process.env.HA_VERIFY === "1" || process.env.HA_CONFIGURE_SHADOW === "1") {
   const flowResponse = await fetch(`${baseUrl}/api/config/config_entries/flow`, {
@@ -154,9 +308,10 @@ if (process.env.HA_VERIFY === "1" || process.env.HA_CONFIGURE_SHADOW === "1") {
           currency: "EUR",
           buy_margin: 2.44,
           sell_margin: -4.5,
-          vat: 22,
-          network_day: 36.9,
-          network_night: 21,
+          vat: 24,
+          network_day: 75.3,
+          network_night: 43.5,
+          network_includes_vat: true,
           day_start: "07:00:00",
           day_end: "22:00:00",
           weekend_night: true,
@@ -210,6 +365,7 @@ if (process.env.HA_INSPECT === "1") {
   }
   const registry = await wsRequest({ type: "config/entity_registry/list" });
   const allStates = await wsRequest({ type: "get_states" });
+  const energyPreferences = await wsRequest({ type: "energy/get_prefs" }).catch(() => ({}));
   const temperatureCandidates = allStates
     .filter((state) => /gaas|vesi/i.test(`${state.entity_id} ${state.attributes.friendly_name || ""}`))
     .map((state) => ({
@@ -319,6 +475,20 @@ if (process.env.HA_INSPECT === "1") {
   const storedScheduler = storedEntries.data.entries.find(
     (entry) => entry.domain === "smart_energy_scheduler",
   );
+  const forecastSolarEntries = storedEntries.data.entries
+    .filter((entry) => entry.domain === "forecast_solar")
+    .map((entry) => ({
+      entry_id: entry.entry_id,
+      title: entry.title,
+      data_keys: Object.keys(entry.data || {}),
+      option_keys: Object.keys(entry.options || {}),
+      azimuth: entry.options?.azimuth ?? entry.data?.azimuth,
+      declination: entry.options?.declination ?? entry.data?.declination,
+      modules_power: entry.options?.modules_power ?? entry.data?.modules_power,
+      total_modules_power:
+        entry.options?.total_modules_power ?? entry.data?.total_modules_power,
+      watt_peak_power: entry.options?.watt_peak_power ?? entry.data?.watt_peak_power,
+    }));
   const storedSubentries = await wsRequest({
     type: "config_entries/subentries/list",
     entry_id: storedScheduler.entry_id,
@@ -393,6 +563,14 @@ if (process.env.HA_INSPECT === "1") {
       forecast_count:
         (weatherResponse.response || weatherResponse)?.["weather.openweathermap"]?.forecast
           ?.length || 0,
+      forecast_sample:
+        (weatherResponse.response || weatherResponse)?.["weather.openweathermap"]?.forecast
+          ?.slice(0, 12).map((item) => ({
+            datetime: item.datetime,
+            temperature: item.temperature,
+            apparent_temperature: item.apparent_temperature,
+            wind_speed: item.wind_speed,
+          })) || [],
     };
   } catch (error) {
     directWeather = { error: error.message };
@@ -439,12 +617,15 @@ if (process.env.HA_INSPECT === "1") {
     ha_version: haConfig.version,
     config_entry_api: schedulerEntries,
     shadow_mode: plan?.shadow_mode,
+    solar_source: plan?.solar_source,
     plan_hours: plan?.hours?.length || 0,
     temperature_days: Object.keys(plan?.temperatures || {}),
     temperatures: plan?.temperatures || {},
     warnings: plan?.warnings || [],
     configured_weather: storedScheduler?.data?.weather_entity,
     scheduler_config: storedScheduler?.data || {},
+    energy_sources: energyPreferences?.energy_sources || [],
+    forecast_solar_entries: forecastSolarEntries,
     configured_subentries: storedSubentries,
     reconfigure_flow: reconfigureFlow,
     device_reconfigure_flow: deviceFlow,
@@ -474,6 +655,15 @@ if (process.env.HA_INSPECT === "1") {
     scheduler_transition_states: allStates.filter(
       (state) => state.entity_id.includes("next_transition"),
     ),
+    legacy_weather_states: allStates
+      .filter((state) => [
+        "sensor.keskminetemp",
+        "sensor.keskminetemp_real_feel",
+        "sensor.heatrequest",
+        "input_number.pumbatunnid_input",
+        "input_number.pumbatunnid_min_input",
+      ].includes(state.entity_id))
+      .map((state) => ({ entity_id: state.entity_id, state: state.state })),
     control_candidates: controlCandidates,
     temperature_history: temperatureHistorySummary,
     temperature_deltas: temperatureDeltaAnalysis,
@@ -493,6 +683,10 @@ socket.close();
 console.log(JSON.stringify({
   uploaded_files: files.length,
   check_config: check.result || check,
+  tariff_update: tariffUpdate,
+  solar_fallback_update: solarFallbackUpdate,
+  weather_model_update: weatherModelUpdate,
+  configuration_matches: configurationMatches,
   config_flow: configFlow,
   inspection,
   restart_requested: process.env.HA_RESTART === "1",

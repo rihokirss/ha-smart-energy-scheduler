@@ -69,9 +69,31 @@ const summary = {
   })),
 };
 
-if (mode === "add") {
+if (mode === "title") {
+  const priceCards = [];
+  for (const card of view.cards || []) {
+    if (card.type === "custom:smart-energy-price-plan-card") priceCards.push(card);
+  }
+  for (const section of view.sections || []) {
+    for (const card of section.cards || []) {
+      if (card.type === "custom:smart-energy-price-plan-card") priceCards.push(card);
+    }
+  }
+  let changed = false;
+  for (const card of priceCards) {
+    if (card.title !== "Hind ja tööplaan") {
+      card.title = "Hind ja tööplaan";
+      changed = true;
+    }
+  }
+  if (changed) await call({ type: "lovelace/config/save", url_path: urlPath, config });
+  summary.title_updated = changed;
+  summary.price_cards = priceCards.length;
+}
+
+if (mode === "add" || mode === "resource") {
   const resourceUrl = "/smart_energy_scheduler/smart-energy-scheduler-card.js";
-  const versionedResourceUrl = `${resourceUrl}?v=0.3.0`;
+  const versionedResourceUrl = `${resourceUrl}?v=0.7.2`;
   const resources = await call({ type: "lovelace/resources/list" });
   const existingResource = resources.find((resource) => resource.url.split("?")[0] === resourceUrl);
   if (!existingResource) {
@@ -84,28 +106,44 @@ if (mode === "add") {
       url: versionedResourceUrl,
     });
   }
-  const card = {
+  if (mode === "resource") {
+    summary.resource_updated = true;
+    socket.close();
+    console.log(JSON.stringify(summary));
+    process.exit(0);
+  }
+  const priceCard = {
     type: "custom:smart-energy-price-plan-card",
-    title: "Elektrihind ja soojuspumba tööplaan",
+    title: "Hind ja tööplaan",
     target_entity: "switch.sonoff_1001208b81_1",
     hours: 48,
   };
+  const curveCard = {
+    type: "custom:smart-energy-heating-curve-card",
+    title: "Soojuspumba küttekõver",
+    target_entity: "switch.sonoff_1001208b81_1",
+  };
   const serialized = JSON.stringify(view);
+  let changed = false;
   if (!serialized.includes("custom:smart-energy-price-plan-card")) {
     if (Array.isArray(view.sections)) {
       const priceSection = view.sections.find((section) =>
         (section.cards || []).some((existing) => existing.type === "custom:apexcharts-card")
       );
-      if (priceSection) priceSection.cards.push(card);
-      else view.sections.push({ type: "grid", cards: [card] });
+      if (priceSection) priceSection.cards.push(priceCard);
+      else view.sections.push({ type: "grid", cards: [priceCard] });
     } else {
-      view.cards = [...(view.cards || []), card];
+      view.cards = [...(view.cards || []), priceCard];
     }
-    await call({ type: "lovelace/config/save", url_path: urlPath, config });
-    summary.added = true;
-  } else {
-    summary.added = false;
+    changed = true;
   }
+  if (!serialized.includes("custom:smart-energy-heating-curve-card")) {
+    if (Array.isArray(view.sections)) view.sections.push({ type: "grid", cards: [curveCard] });
+    else view.cards = [...(view.cards || []), curveCard];
+    changed = true;
+  }
+  if (changed) await call({ type: "lovelace/config/save", url_path: urlPath, config });
+  summary.added = changed;
 }
 
 socket.close();

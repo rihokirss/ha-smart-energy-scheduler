@@ -36,3 +36,87 @@ set_override:
       description: Required for a timed override; ignored in Auto mode.
       selector:
         datetime:
+
+update_device_settings:
+  name: Update device heating curve
+  description: Update weather-response and daily-hour settings for one scheduled device.
+  fields:
+    device_id:
+      required: true
+      selector:
+        text:
+    entry_id:
+      selector:
+        text:
+    base_hours:
+      selector:
+        number:
+          min: 0
+          max: 25
+          step: 1
+          unit_of_measurement: h
+    min_hours:
+      selector:
+        number:
+          min: 0
+          max: 25
+          step: 1
+          unit_of_measurement: h
+    max_hours:
+      selector:
+        number:
+          min: 0
+          max: 25
+          step: 1
+          unit_of_measurement: h
+    always_on_below_eur_mwh:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 1
+          unit_of_measurement: EUR/MWh
+    always_on_below_enabled:
+      selector:
+        boolean:
+    always_off_above_eur_mwh:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 1
+          unit_of_measurement: EUR/MWh
+    always_off_above_enabled:
+      selector:
+        boolean:
+    reference_temperature:
+      selector:
+        number:
+          min: -30
+          max: 30
+          step: 0.5
+          unit_of_measurement: °C
+    hours_per_degree:
+      selector:
+        number:
+          min: 0
+          max: 5
+          step: 0.1
+          unit_of_measurement: h/°C
+    weather_lookahead_hours:
+      selector:
+        number:
+          min: 1
+          max: 48
+          step: 1
+          unit_of_measurement: h
+    preheat_hours:
+      selector:
+        number:
+          min: 0
+          max: 24
+          step: 1
+          unit_of_measurement: h
+    legacy_wind_chill:
+      selector:
+        boolean:

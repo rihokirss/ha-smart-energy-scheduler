@@ -2,11 +2,70 @@
   "title": "Nutikas energiaplaneerija",
   "config": {
     "step": {
-      "user": {"title": "Energiajuhtimise seadistamine", "description": "Kontrolli imporditud tariife. Vaikimisi on varirežiim sees ja seadmeid veel ei juhita.", "data": {"area": "Nord Pooli hinnapiirkond", "currency": "Valuuta", "buy_margin": "Ostumarginaal", "sell_margin": "Müügimarginaal", "vat": "Käibemaks", "network_day": "Päevane võrgutasu", "network_night": "Öine võrgutasu", "day_start": "Päevatariifi algus", "day_end": "Päevatariifi lõpp", "weekend_night": "Nädalavahetusel öötariif", "weather_entity": "Ilmaprognoosi olem", "base_load_w": "Maja baaskoormus", "grid_power_sensor": "Võrguvõimsuse sensor (diagnostika)", "pv_power_sensor": "PV-võimsuse sensor (diagnostika)", "shadow_mode": "Varirežiim", "tariff_confirmed": "Olen tariifid üle kontrollinud"}},
-      "reconfigure": {"title": "Ühisseadete muutmine", "description": "Varirežiimi väljalülitamine lubab sihtseadmeid päriselt juhtida.", "data": {"area": "Nord Pooli hinnapiirkond", "currency": "Valuuta", "buy_margin": "Ostumarginaal", "sell_margin": "Müügimarginaal", "vat": "Käibemaks", "network_day": "Päevane võrgutasu", "network_night": "Öine võrgutasu", "day_start": "Päevatariifi algus", "day_end": "Päevatariifi lõpp", "weekend_night": "Nädalavahetusel öötariif", "weather_entity": "Ilmaprognoosi olem", "base_load_w": "Maja baaskoormus", "grid_power_sensor": "Võrguvõimsuse sensor (diagnostika)", "pv_power_sensor": "PV-võimsuse sensor (diagnostika)", "shadow_mode": "Varirežiim", "tariff_confirmed": "Olen tariifid üle kontrollinud"}}
+      "user": {
+        "title": "Energiajuhtimise seadistamine",
+        "description": "Kontrolli imporditud tariife. Vaikimisi on varirežiim sees ja seadmeid veel ei juhita.",
+        "data": {
+          "area": "Nord Pooli hinnapiirkond",
+          "currency": "Valuuta",
+          "buy_margin": "Ostumarginaal",
+          "sell_margin": "Müügimarginaal",
+          "vat": "Käibemaks",
+          "network_day": "Päevane võrgutasu (€/MWh)",
+          "network_night": "Öine võrgutasu (€/MWh)",
+          "network_includes_vat": "Võrgutasud sisaldavad käibemaksu",
+          "day_start": "Päevatariifi algus",
+          "day_end": "Päevatariifi lõpp",
+          "weekend_night": "Nädalavahetustel ja riigipühadel öötariif",
+          "weather_entity": "Ilmaprognoosi olem",
+          "base_load_w": "Maja baaskoormus",
+          "solar_fallback_enabled": "Kasuta PV-prognoosi puudumisel päikesetõusu/-loojangu varuplaani",
+          "solar_fallback_start_month": "Päikese varuplaani esimene kuu",
+          "solar_fallback_end_month": "Päikese varuplaani viimane kuu",
+          "solar_fallback_sunrise_delay_h": "Varuplaan algab pärast päikesetõusu",
+          "solar_fallback_sunset_advance_h": "Varuplaan lõpeb enne päikeseloojangut",
+          "grid_power_sensor": "Võrguvõimsuse sensor (diagnostika)",
+          "pv_power_sensor": "PV-võimsuse sensor (diagnostika)",
+          "shadow_mode": "Varirežiim",
+          "tariff_confirmed": "Olen tariifid üle kontrollinud"
+        }
+      },
+      "reconfigure": {
+        "title": "Ühisseadete muutmine",
+        "description": "Varirežiimi väljalülitamine lubab sihtseadmeid päriselt juhtida.",
+        "data": {
+          "area": "Nord Pooli hinnapiirkond",
+          "currency": "Valuuta",
+          "buy_margin": "Ostumarginaal",
+          "sell_margin": "Müügimarginaal",
+          "vat": "Käibemaks",
+          "network_day": "Päevane võrgutasu (€/MWh)",
+          "network_night": "Öine võrgutasu (€/MWh)",
+          "network_includes_vat": "Võrgutasud sisaldavad käibemaksu",
+          "day_start": "Päevatariifi algus",
+          "day_end": "Päevatariifi lõpp",
+          "weekend_night": "Nädalavahetustel ja riigipühadel öötariif",
+          "weather_entity": "Ilmaprognoosi olem",
+          "base_load_w": "Maja baaskoormus",
+          "solar_fallback_enabled": "Kasuta PV-prognoosi puudumisel päikesetõusu/-loojangu varuplaani",
+          "solar_fallback_start_month": "Päikese varuplaani esimene kuu",
+          "solar_fallback_end_month": "Päikese varuplaani viimane kuu",
+          "solar_fallback_sunrise_delay_h": "Varuplaan algab pärast päikesetõusu",
+          "solar_fallback_sunset_advance_h": "Varuplaan lõpeb enne päikeseloojangut",
+          "grid_power_sensor": "Võrguvõimsuse sensor (diagnostika)",
+          "pv_power_sensor": "PV-võimsuse sensor (diagnostika)",
+          "shadow_mode": "Varirežiim",
+          "tariff_confirmed": "Olen tariifid üle kontrollinud"
+        }
+      }
     },
-    "error": {"tariff_not_confirmed": "Kontrolli tariifid ja kinnita need enne jätkamist."},
-    "abort": {"single_instance_allowed": "Toetatud on üks planeerija eksemplar.", "reconfigure_successful": "Seadistus uuendatud."}
+    "error": {
+      "tariff_not_confirmed": "Kontrolli tariifid ja kinnita need enne jätkamist."
+    },
+    "abort": {
+      "single_instance_allowed": "Toetatud on üks planeerija eksemplar.",
+      "reconfigure_successful": "Seadistus uuendatud."
+    }
   },
   "config_subentries": {
     "device": {
@@ -17,20 +76,152 @@
         "reconfigure": "Seadista seade"
       },
       "step": {
-        "user": {"title": "Juhitava seadme lisamine", "description": "Sihtolemit ei toggle'ita. Aktiivne tähendab turn_on, kui pööratud väljund pole valitud.", "data": {"name": "Nimi", "target_entity": "Sihtolem", "inverted": "Pööratud väljund", "feedback_entity": "Töötamise tagasiside olem", "power_sensor": "Võimsussensor", "power_multiplier": "Võimsuse kordaja", "nominal_power_w": "Nimivõimsus", "window_start": "Lubatud tööakna algus", "window_end": "Lubatud tööakna lõpp", "base_hours": "Baastunnid päevas", "min_hours": "Minimaalsed tunnid päevas", "max_hours": "Maksimaalsed tunnid päevas", "min_on_hours": "Minimaalne järjestikune ON", "min_off_hours": "Minimaalne järjestikune OFF", "use_weather": "Kasuta näivat temperatuuri (real feel)", "reference_temperature": "Näiv referentstemperatuur", "hours_per_degree": "Lisatunnid külmema kraadi kohta", "solar_priority": "Päikeseprioriteet", "failure_mode": "Käitumine andmevea korral", "enabled": "Automaatjuhtimine lubatud"}},
-        "reconfigure": {"title": "Juhitava seadme muutmine", "description": "Vali pööratud väljund, kui füüsiline OFF tähendab töötamise lubamist.", "data": {"name": "Nimi", "target_entity": "Sihtolem", "inverted": "Pööratud väljund", "feedback_entity": "Töötamise tagasiside olem", "power_sensor": "Võimsussensor", "power_multiplier": "Võimsuse kordaja", "nominal_power_w": "Nimivõimsus", "window_start": "Lubatud tööakna algus", "window_end": "Lubatud tööakna lõpp", "base_hours": "Baastunnid päevas", "min_hours": "Minimaalsed tunnid päevas", "max_hours": "Maksimaalsed tunnid päevas", "min_on_hours": "Minimaalne järjestikune ON", "min_off_hours": "Minimaalne järjestikune OFF", "use_weather": "Kasuta näivat temperatuuri (real feel)", "reference_temperature": "Näiv referentstemperatuur", "hours_per_degree": "Lisatunnid külmema kraadi kohta", "solar_priority": "Päikeseprioriteet", "failure_mode": "Käitumine andmevea korral", "enabled": "Automaatjuhtimine lubatud"}}
+        "user": {
+          "title": "Juhitava seadme lisamine",
+          "description": "Sihtolemit ei toggle'ita. Aktiivne tähendab turn_on, kui pööratud väljund pole valitud.",
+          "data": {
+            "name": "Nimi",
+            "target_entity": "Sihtolem",
+            "inverted": "Pööratud väljund",
+            "feedback_entity": "Töötamise tagasiside olem",
+            "power_sensor": "Võimsussensor",
+            "power_multiplier": "Võimsuse kordaja",
+            "nominal_power_w": "Nimivõimsus",
+            "window_start": "Lubatud tööakna algus",
+            "window_end": "Lubatud tööakna lõpp",
+            "base_hours": "Baastunnid päevas",
+            "min_hours": "Minimaalsed tunnid päevas",
+          "max_hours": "Maksimaalsed tunnid päevas",
+          "always_on_below_eur_mwh": "Alati sees selle efektiivhinnaga või alla",
+          "always_off_above_eur_mwh": "Alati väljas selle efektiivhinnaga või üle",
+          "min_on_hours": "Minimaalne järjestikune ON",
+            "min_off_hours": "Minimaalne järjestikune OFF",
+            "use_weather": "Kasuta näivat temperatuuri (real feel)",
+            "legacy_wind_chill": "Kasuta vana tuulekülma valemit",
+            "reference_temperature": "Näiv referentstemperatuur",
+            "hours_per_degree": "Lisatunnid külmema kraadi kohta",
+            "weather_lookahead_hours": "Prognoosi keskmistamise aken",
+            "preheat_hours": "Prognoosi ettevaade hoone inertsi jaoks",
+            "solar_priority": "Päikeseprioriteet",
+            "failure_mode": "Käitumine andmevea korral",
+            "enabled": "Automaatjuhtimine lubatud"
+          }
+        },
+        "reconfigure": {
+          "title": "Juhitava seadme muutmine",
+          "description": "Vali pööratud väljund, kui füüsiline OFF tähendab töötamise lubamist.",
+          "data": {
+            "name": "Nimi",
+            "target_entity": "Sihtolem",
+            "inverted": "Pööratud väljund",
+            "feedback_entity": "Töötamise tagasiside olem",
+            "power_sensor": "Võimsussensor",
+            "power_multiplier": "Võimsuse kordaja",
+            "nominal_power_w": "Nimivõimsus",
+            "window_start": "Lubatud tööakna algus",
+            "window_end": "Lubatud tööakna lõpp",
+            "base_hours": "Baastunnid päevas",
+            "min_hours": "Minimaalsed tunnid päevas",
+          "max_hours": "Maksimaalsed tunnid päevas",
+          "always_on_below_eur_mwh": "Alati sees selle efektiivhinnaga või alla",
+          "always_off_above_eur_mwh": "Alati väljas selle efektiivhinnaga või üle",
+          "min_on_hours": "Minimaalne järjestikune ON",
+            "min_off_hours": "Minimaalne järjestikune OFF",
+            "use_weather": "Kasuta näivat temperatuuri (real feel)",
+            "legacy_wind_chill": "Kasuta vana tuulekülma valemit",
+            "reference_temperature": "Näiv referentstemperatuur",
+            "hours_per_degree": "Lisatunnid külmema kraadi kohta",
+            "weather_lookahead_hours": "Prognoosi keskmistamise aken",
+            "preheat_hours": "Prognoosi ettevaade hoone inertsi jaoks",
+            "solar_priority": "Päikeseprioriteet",
+            "failure_mode": "Käitumine andmevea korral",
+            "enabled": "Automaatjuhtimine lubatud"
+          }
+        }
       },
-      "abort": {"reconfigure_successful": "Seade uuendatud."},
-      "error": {"invalid_hour_limits": "Päeva miinimumtunnid ei tohi ületada maksimumtunde."}
+      "abort": {
+        "reconfigure_successful": "Seade uuendatud."
+      },
+      "error": {
+        "invalid_hour_limits": "Päeva miinimumtunnid ei tohi ületada maksimumtunde.",
+        "invalid_price_limits": "Alati-ON hinnapiir peab olema madalam kui alati-OFF hinnapiir."
+      }
     }
   },
-  "selector": {"failure_mode": {"options": {"force_on": "Sund-ON", "force_off": "Sund-OFF", "keep": "Hoia praegust olekut"}}},
+  "selector": {
+    "failure_mode": {
+      "options": {
+        "force_on": "Sund-ON",
+        "force_off": "Sund-OFF",
+        "keep": "Hoia praegust olekut"
+      }
+    }
+  },
   "entity": {
-    "switch": {"automatic_control": {"name": "Automaatjuhtimine"}},
-    "select": {"override": {"name": "Käsijuhtimine", "state": {"auto": "Automaatne", "on": "Sund-ON", "off": "Sund-OFF"}}},
-    "datetime": {"override_until": {"name": "Käsijuhtimise lõpp"}},
-    "number": {"base_hours": {"name": "Baastunnid"}, "minimum_hours": {"name": "Miinimumtunnid"}, "maximum_hours": {"name": "Maksimumtunnid"}},
-    "binary_sensor": {"scheduled_active": {"name": "Plaani järgi aktiivne"}},
-    "sensor": {"planned_hours": {"name": "Planeeritud tunnid"}, "actual_hours": {"name": "Tegelikud tunnid"}, "remaining_hours": {"name": "Puuduvad tunnid"}, "next_transition": {"name": "Järgmine olekumuutus"}, "reason": {"name": "Juhtimise põhjus"}}
+    "switch": {
+      "automatic_control": {
+        "name": "Automaatjuhtimine"
+      }
+    },
+    "select": {
+      "override": {
+        "name": "Käsijuhtimine",
+        "state": {
+          "auto": "Automaatne",
+          "on": "Sund-ON",
+          "off": "Sund-OFF"
+        }
+      }
+    },
+    "datetime": {
+      "override_until": {
+        "name": "Käsijuhtimise lõpp"
+      }
+    },
+    "number": {
+      "base_hours": {
+        "name": "Baastunnid"
+      },
+      "minimum_hours": {
+        "name": "Miinimumtunnid"
+      },
+      "maximum_hours": {
+        "name": "Maksimumtunnid"
+      },
+      "reference_temperature": {
+        "name": "Referentstemperatuur"
+      },
+      "hours_per_degree": {
+        "name": "Tunnid kraadi kohta"
+      },
+      "weather_lookahead_hours": {
+        "name": "Prognoosi keskmistamise aken"
+      },
+      "preheat_hours": {
+        "name": "Prognoosi ettevaade"
+      }
+    },
+    "binary_sensor": {
+      "scheduled_active": {
+        "name": "Plaani järgi aktiivne"
+      }
+    },
+    "sensor": {
+      "planned_hours": {
+        "name": "Planeeritud tunnid"
+      },
+      "actual_hours": {
+        "name": "Tegelikud tunnid"
+      },
+      "remaining_hours": {
+        "name": "Puuduvad tunnid"
+      },
+      "next_transition": {
+        "name": "Järgmine olekumuutus"
+      },
+      "reason": {
+        "name": "Juhtimise põhjus"
+      }
+    }
   }
 }

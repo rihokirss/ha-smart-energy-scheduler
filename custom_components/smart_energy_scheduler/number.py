@@ -5,12 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
-from homeassistant.const import UnitOfTime
+from homeassistant.const import UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SmartEnergyConfigEntry
-from .const import CONF_BASE_HOURS, CONF_MAX_HOURS, CONF_MIN_HOURS
+from .const import (
+    CONF_BASE_HOURS,
+    CONF_HOURS_PER_DEGREE,
+    CONF_MAX_HOURS,
+    CONF_MIN_HOURS,
+    CONF_PREHEAT_HOURS,
+    CONF_REFERENCE_TEMPERATURE,
+    CONF_WEATHER_LOOKAHEAD_HOURS,
+    DEFAULT_HEAT_PUMP,
+)
 from .entity import SchedulerEntity
 
 
@@ -50,6 +59,46 @@ DESCRIPTIONS = (
         native_unit_of_measurement=UnitOfTime.HOURS,
         mode=NumberMode.BOX,
     ),
+    SchedulerNumberDescription(
+        key="reference_temperature",
+        translation_key="reference_temperature",
+        config_key=CONF_REFERENCE_TEMPERATURE,
+        native_min_value=-30,
+        native_max_value=30,
+        native_step=0.5,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        mode=NumberMode.BOX,
+    ),
+    SchedulerNumberDescription(
+        key="hours_per_degree",
+        translation_key="hours_per_degree",
+        config_key=CONF_HOURS_PER_DEGREE,
+        native_min_value=0,
+        native_max_value=5,
+        native_step=0.1,
+        native_unit_of_measurement="h/°C",
+        mode=NumberMode.BOX,
+    ),
+    SchedulerNumberDescription(
+        key="weather_lookahead_hours",
+        translation_key="weather_lookahead_hours",
+        config_key=CONF_WEATHER_LOOKAHEAD_HOURS,
+        native_min_value=1,
+        native_max_value=48,
+        native_step=1,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        mode=NumberMode.BOX,
+    ),
+    SchedulerNumberDescription(
+        key="preheat_hours",
+        translation_key="preheat_hours",
+        config_key=CONF_PREHEAT_HOURS,
+        native_min_value=0,
+        native_max_value=24,
+        native_step=1,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        mode=NumberMode.BOX,
+    ),
 )
 
 
@@ -79,7 +128,12 @@ class SchedulerHoursNumber(SchedulerEntity, NumberEntity):
 
     @property
     def native_value(self) -> float:
-        return float(self.subentry.data[self.entity_description.config_key])
+        return float(
+            self.subentry.data.get(
+                self.entity_description.config_key,
+                DEFAULT_HEAT_PUMP[self.entity_description.config_key],
+            )
+        )
 
     async def async_set_native_value(self, value: float) -> None:
         data = dict(self.subentry.data)

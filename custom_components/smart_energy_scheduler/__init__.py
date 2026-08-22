@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime as dt_datetime
 from pathlib import Path
 
 import voluptuous as vol
@@ -14,6 +14,18 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_ALWAYS_OFF_ABOVE,
+    CONF_ALWAYS_OFF_ABOVE_ENABLED,
+    CONF_ALWAYS_ON_BELOW,
+    CONF_ALWAYS_ON_BELOW_ENABLED,
+    CONF_BASE_HOURS,
+    CONF_HOURS_PER_DEGREE,
+    CONF_LEGACY_WIND_CHILL,
+    CONF_MAX_HOURS,
+    CONF_MIN_HOURS,
+    CONF_PREHEAT_HOURS,
+    CONF_REFERENCE_TEMPERATURE,
+    CONF_WEATHER_LOOKAHEAD_HOURS,
     DOMAIN,
     OVERRIDE_AUTO,
     OVERRIDE_OFF,
@@ -21,6 +33,7 @@ from .const import (
     PLATFORMS,
     SERVICE_RECALCULATE,
     SERVICE_SET_OVERRIDE,
+    SERVICE_UPDATE_DEVICE_SETTINGS,
 )
 from .coordinator import SmartEnergyCoordinator
 from .websocket import async_register as async_register_websocket
@@ -33,6 +46,29 @@ OVERRIDE_SCHEMA = vol.Schema(
         vol.Required("mode"): vol.In([OVERRIDE_AUTO, OVERRIDE_ON, OVERRIDE_OFF]),
         vol.Optional("until"): cv.datetime,
         vol.Optional("entry_id"): cv.string,
+    }
+)
+
+UPDATE_DEVICE_SETTINGS_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_id"): cv.string,
+        vol.Optional("entry_id"): cv.string,
+        vol.Optional(CONF_BASE_HOURS): vol.All(vol.Coerce(float), vol.Range(min=0, max=25)),
+        vol.Optional(CONF_MIN_HOURS): vol.All(vol.Coerce(float), vol.Range(min=0, max=25)),
+        vol.Optional(CONF_MAX_HOURS): vol.All(vol.Coerce(float), vol.Range(min=0, max=25)),
+        vol.Optional(CONF_ALWAYS_ON_BELOW): vol.All(vol.Coerce(float), vol.Range(min=0, max=1000)),
+        vol.Optional(CONF_ALWAYS_OFF_ABOVE): vol.All(vol.Coerce(float), vol.Range(min=0, max=1000)),
+        vol.Optional(CONF_ALWAYS_ON_BELOW_ENABLED): cv.boolean,
+        vol.Optional(CONF_ALWAYS_OFF_ABOVE_ENABLED): cv.boolean,
+        vol.Optional(CONF_REFERENCE_TEMPERATURE): vol.All(
+            vol.Coerce(float), vol.Range(min=-30, max=30)
+        ),
+        vol.Optional(CONF_HOURS_PER_DEGREE): vol.All(vol.Coerce(float), vol.Range(min=0, max=5)),
+        vol.Optional(CONF_WEATHER_LOOKAHEAD_HOURS): vol.All(
+            vol.Coerce(float), vol.Range(min=1, max=48)
+        ),
+        vol.Optional(CONF_PREHEAT_HOURS): vol.All(vol.Coerce(float), vol.Range(min=0, max=24)),
+        vol.Optional(CONF_LEGACY_WIND_CHILL): cv.boolean,
     }
 )
 
@@ -67,7 +103,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             [runtimes[call.data["entry_id"]]] if call.data.get("entry_id") else runtimes.values()
         )
         until = call.data.get("until")
-        if isinstance(until, datetime) and until.tzinfo is None:
+        if isinstance(until, dt_datetime) and until.tzinfo is None:
             until = dt_util.as_local(until)
         for runtime in candidates:
             if call.data["device_id"] in runtime.states:
@@ -75,8 +111,61 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 return
         raise ValueError("Scheduler device not found")
 
+    async def update_device_settings(call: ServiceCall) -> None:
+        """Update the heating-curve inputs of one configured device."""
+        runtimes = hass.data[DOMAIN]
+        candidates = (
+            [runtimes[call.data["entry_id"]]] if call.data.get("entry_id") else runtimes.values()
+        )
+        setting_keys = {
+            CONF_BASE_HOURS,
+            CONF_MIN_HOURS,
+            CONF_MAX_HOURS,
+            CONF_REFERENCE_TEMPERATURE,
+            CONF_HOURS_PER_DEGREE,
+            CONF_WEATHER_LOOKAHEAD_HOURS,
+            CONF_PREHEAT_HOURS,
+            CONF_LEGACY_WIND_CHILL,
+            CONF_ALWAYS_ON_BELOW,
+            CONF_ALWAYS_OFF_ABOVE,
+        }
+        for runtime in candidates:
+            subentry = next(
+                (
+                    item
+                    for item in runtime.device_subentries
+                    if item.subentry_id == call.data["device_id"]
+                ),
+                None,
+            )
+            if subentry is None:
+                continue
+            data = dict(subentry.data)
+            data.update({key: call.data[key] for key in setting_keys if key in call.data})
+            if call.data.get(CONF_ALWAYS_ON_BELOW_ENABLED) is False:
+                data.pop(CONF_ALWAYS_ON_BELOW, None)
+            if call.data.get(CONF_ALWAYS_OFF_ABOVE_ENABLED) is False:
+                data.pop(CONF_ALWAYS_OFF_ABOVE, None)
+            if float(data[CONF_MIN_HOURS]) > float(data[CONF_MAX_HOURS]):
+                raise ValueError("Minimum daily hours cannot exceed maximum daily hours")
+            if (
+                CONF_ALWAYS_ON_BELOW in data
+                and CONF_ALWAYS_OFF_ABOVE in data
+                and float(data[CONF_ALWAYS_ON_BELOW]) >= float(data[CONF_ALWAYS_OFF_ABOVE])
+            ):
+                raise ValueError("Always-ON price must be below the always-OFF price")
+            hass.config_entries.async_update_subentry(runtime.entry, subentry, data=data)
+            return
+        raise ValueError("Scheduler device not found")
+
     hass.services.async_register(DOMAIN, SERVICE_RECALCULATE, recalculate)
     hass.services.async_register(DOMAIN, SERVICE_SET_OVERRIDE, set_override, schema=OVERRIDE_SCHEMA)
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UPDATE_DEVICE_SETTINGS,
+        update_device_settings,
+        schema=UPDATE_DEVICE_SETTINGS_SCHEMA,
+    )
     return True
 
 

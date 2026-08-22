@@ -71,7 +71,10 @@ def parse_nordpool_response(payload: Any, area: str) -> list[QuarterPrice]:
 
 def is_day_tariff(moment: datetime, tariff: TariffConfig) -> bool:
     """Return whether a slot uses the day network tariff."""
-    if tariff.weekend_night and moment.weekday() >= 5:
+    if tariff.weekend_night and (
+        moment.weekday() >= 5
+        or (tariff.holiday_country == "EE" and is_estonian_public_holiday(moment.date()))
+    ):
         return False
     local_time = moment.timetz().replace(tzinfo=None)
     if tariff.day_start == tariff.day_end:
@@ -79,6 +82,46 @@ def is_day_tariff(moment: datetime, tariff: TariffConfig) -> bool:
     if tariff.day_start < tariff.day_end:
         return tariff.day_start <= local_time < tariff.day_end
     return local_time >= tariff.day_start or local_time < tariff.day_end
+
+
+def _easter_sunday(year: int) -> date:
+    """Calculate Gregorian Easter Sunday for movable Estonian holidays."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    ell = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * ell) // 451
+    month = (h + ell - 7 * m + 114) // 31
+    day = (h + ell - 7 * m + 114) % 31 + 1
+    return date(year, month, day)
+
+
+def is_estonian_public_holiday(day: date) -> bool:
+    """Return whether a date is an Estonian public holiday."""
+    fixed = {
+        (1, 1),
+        (2, 24),
+        (5, 1),
+        (6, 23),
+        (6, 24),
+        (8, 20),
+        (12, 24),
+        (12, 25),
+        (12, 26),
+    }
+    easter = _easter_sunday(day.year)
+    return (day.month, day.day) in fixed or day in {
+        easter - timedelta(days=2),
+        easter,
+        easter + timedelta(days=49),
+    }
 
 
 def aggregate_hourly(
@@ -95,9 +138,11 @@ def aggregate_hourly(
             network = (
                 tariff.network_day if is_day_tariff(local_start, tariff) else tariff.network_night
             )
-            import_price = (quarter.market_eur_mwh + tariff.buy_margin + network) * (
-                1 + tariff.vat_fraction
+            energy_price = (quarter.market_eur_mwh + tariff.buy_margin) * (1 + tariff.vat_fraction)
+            network_price = (
+                network if tariff.network_includes_vat else network * (1 + tariff.vat_fraction)
             )
+            import_price = energy_price + network_price
             export_price = quarter.market_eur_mwh + tariff.sell_margin
             buckets[key].append((quarter.market_eur_mwh, import_price, export_price, duration_h))
 
@@ -139,6 +184,51 @@ def merge_solar_forecast(
         hour.base_load_wh = max(0.0, base_load_w)
 
 
+def month_in_range(month: int, start_month: int, end_month: int) -> bool:
+    """Return whether a month is inside an inclusive, possibly wrapping range."""
+    start = max(1, min(12, int(start_month)))
+    end = max(1, min(12, int(end_month)))
+    return start <= month <= end if start <= end else month >= start or month <= end
+
+
+def apply_solar_window_fallback(
+    hours: Sequence[HourPrice],
+    sun_events: Mapping[date, tuple[datetime | None, datetime | None]],
+    base_load_w: float,
+    controlled_load_w: float,
+    start_month: int,
+    end_month: int,
+    sunrise_delay_h: float,
+    sunset_advance_h: float,
+) -> int:
+    """Apply the previous sunrise/sunset solar assumption to complete hours.
+
+    Inside the configured seasonal window, fallback PV covers the house base
+    load plus all configured controlled loads. This reproduces the previous
+    YAML behavior while retaining shared-PV allocation between devices.
+    """
+    applied = 0
+    for hour in hours:
+        duration_h = max(0.0, (hour.end - hour.start).total_seconds() / 3600)
+        hour.pv_wh = 0.0
+        hour.base_load_wh = max(0.0, base_load_w) * duration_h
+        if not month_in_range(hour.start.month, start_month, end_month):
+            continue
+        sunrise, sunset = sun_events.get(hour.start.date(), (None, None))
+        if sunrise is None or sunset is None:
+            continue
+        window_start = sunrise.astimezone(hour.start.tzinfo) + timedelta(
+            hours=max(0.0, sunrise_delay_h)
+        )
+        window_end = sunset.astimezone(hour.start.tzinfo) - timedelta(
+            hours=max(0.0, sunset_advance_h)
+        )
+        if hour.start >= window_start and hour.end <= window_end:
+            hour.pv_wh = (max(0.0, base_load_w) + max(0.0, controlled_load_w)) * duration_h
+            applied += 1
+    return applied
+
+
 def weather_target_hours(
     base_hours: float,
     reference_temperature: float,
@@ -152,6 +242,42 @@ def weather_target_hours(
     if average_apparent_temperature is not None:
         target += (reference_temperature - average_apparent_temperature) * hours_per_degree
     return round(max(minimum, min(maximum, target)))
+
+
+def legacy_wind_chill(temperature: float, wind_speed: float) -> float:
+    """Reproduce the previous YAML wind-adjusted temperature formula."""
+    wind_factor = max(0.0, wind_speed) ** 0.16
+    return 13.2 + 0.6215 * temperature - 11.37 * wind_factor + 0.3965 * temperature * wind_factor
+
+
+def forecast_window_average(
+    samples: Sequence[tuple[datetime, float]],
+    target_day: date,
+    now: datetime,
+    timezone: Any,
+    lookahead_hours: float,
+    preheat_hours: float,
+) -> float | None:
+    """Average the future apparent temperature assigned to one load day.
+
+    Preheat shifts the rolling forecast window further forward for buildings
+    with high thermal inertia. Zero preheat and 12-hour lookahead match the
+    previous YAML model's intent.
+    """
+    local_now = now.astimezone(timezone)
+    day_start = datetime.combine(target_day, time(), tzinfo=timezone)
+    window_start = (
+        local_now + timedelta(hours=max(0.0, preheat_hours))
+        if target_day == local_now.date()
+        else day_start + timedelta(hours=max(0.0, preheat_hours))
+    )
+    window_end = window_start + timedelta(hours=max(1.0, lookahead_hours))
+    values = [
+        float(value)
+        for stamp, value in samples
+        if window_start.timestamp() <= stamp.timestamp() < window_end.timestamp()
+    ]
+    return sum(values) / len(values) if values else None
 
 
 def is_in_window(moment: datetime, start: time, end: time) -> bool:
@@ -242,6 +368,7 @@ def build_plans(
     devices: Sequence[PlanningDevice],
     targets: Mapping[str, Mapping[date, int]],
     forced_states: Mapping[str, Mapping[float, bool]] | None = None,
+    minimum_targets: Mapping[str, Mapping[date, int]] | None = None,
 ) -> dict[str, DevicePlan]:
     """Plan devices in solar priority order without double-counting PV."""
     remaining_solar = {hour.start: hour.surplus_wh for hour in hours}
@@ -252,22 +379,140 @@ def build_plans(
             _effective_cost(hour, device.nominal_power_w, remaining_solar[hour.start])
             for hour in hours
         ]
+        adjusted_targets: dict[date, int] = {}
+        mandatory_targets: dict[date, int] = {}
+        always_on_forced: dict[float, bool] = {}
+        maximum_price_forced: dict[float, bool] = {}
+        optimizer_costs: list[float] = []
+        for hour, (cost, _solar) in zip(hours, priced, strict=True):
+            allowed = hour.start.date() in device_targets and is_in_window(
+                hour.start, device.window_start, device.window_end
+            )
+            if (
+                allowed
+                and device.always_on_below_eur_mwh is not None
+                and cost <= device.always_on_below_eur_mwh
+            ):
+                always_on_forced[hour.start.timestamp()] = True
+            if (
+                allowed
+                and device.always_off_above_eur_mwh is not None
+                and cost >= device.always_off_above_eur_mwh
+            ):
+                maximum_price_forced[hour.start.timestamp()] = False
+            optimizer_costs.append(
+                cost + 1_000_000
+                if (
+                    allowed
+                    and device.always_off_above_eur_mwh is not None
+                    and cost >= device.always_off_above_eur_mwh
+                )
+                else cost
+            )
+        for day, requested in device_targets.items():
+            available_indices = [
+                index
+                for index, hour in enumerate(hours)
+                if hour.start.date() == day
+                and is_in_window(hour.start, device.window_start, device.window_end)
+            ]
+            target = min(max(0, int(requested)), len(available_indices))
+            if device.always_off_above_eur_mwh is not None:
+                below_maximum = sum(
+                    priced[index][0] < device.always_off_above_eur_mwh
+                    for index in available_indices
+                )
+                safety_minimum = int((minimum_targets or {}).get(device.device_id, {}).get(day, 0))
+                target = max(safety_minimum, min(target, below_maximum))
+            always_on_count = sum(
+                hours[index].start.timestamp() in always_on_forced for index in available_indices
+            )
+            safety_minimum = int((minimum_targets or {}).get(device.device_id, {}).get(day, 0))
+            mandatory_targets[day] = min(
+                len(available_indices), max(safety_minimum, always_on_count)
+            )
+            adjusted_targets[day] = min(len(available_indices), max(target, always_on_count))
+        device_forced = dict(maximum_price_forced)
+        device_forced.update(always_on_forced)
+        # A locked current hour represents an already-started cycle and wins over
+        # a newly calculated price threshold until the next whole hour.
+        device_forced.update((forced_states or {}).get(device.device_id, {}))
         sequence = _optimize_binary_sequence(
             hours,
-            [item[0] for item in priced],
-            device_targets,
+            optimizer_costs,
+            adjusted_targets,
             device,
-            (forced_states or {}).get(device.device_id),
+            device_forced,
         )
+        if sequence is None and maximum_price_forced:
+            # Weather demand is discretionary above the configured maximum
+            # price. Drop back to only safety/always-ON hours before relaxing
+            # that price ceiling.
+            adjusted_targets = dict(mandatory_targets)
+            sequence = _optimize_binary_sequence(
+                hours,
+                optimizer_costs,
+                adjusted_targets,
+                device,
+                device_forced,
+            )
+        if sequence is None and maximum_price_forced:
+            # The daily safety minimum, an explicit always-ON threshold, or an
+            # already-started cycle may override the maximum price.
+            device_forced = dict(always_on_forced)
+            device_forced.update((forced_states or {}).get(device.device_id, {}))
+            sequence = _optimize_binary_sequence(
+                hours,
+                optimizer_costs,
+                adjusted_targets,
+                device,
+                device_forced,
+            )
+        if sequence is None and (always_on_forced or maximum_price_forced):
+            # A forced cheap hour can require adjacent runtime to satisfy the
+            # device's minimum ON period. The same applies when a daily safety
+            # minimum cannot be represented by a shorter valid cycle.
+            available_by_day = {
+                day: sum(
+                    hour.start.date() == day
+                    and is_in_window(hour.start, device.window_start, device.window_end)
+                    for hour in hours
+                )
+                for day in adjusted_targets
+            }
+            queue = [adjusted_targets]
+            visited = {tuple(sorted(adjusted_targets.items()))}
+            while sequence is None and queue and len(visited) <= 256:
+                candidate = queue.pop(0)
+                for day in sorted(candidate):
+                    if candidate[day] >= available_by_day[day]:
+                        continue
+                    expanded = dict(candidate)
+                    expanded[day] += 1
+                    key = tuple(sorted(expanded.items()))
+                    if key in visited:
+                        continue
+                    visited.add(key)
+                    sequence = _optimize_binary_sequence(
+                        hours,
+                        optimizer_costs,
+                        expanded,
+                        device,
+                        device_forced,
+                    )
+                    if sequence is not None:
+                        adjusted_targets = expanded
+                        break
+                    queue.append(expanded)
         if sequence is None:
             result[device.device_id] = DevicePlan(
                 device_id=device.device_id,
-                target_hours=device_targets,
+                target_hours=adjusted_targets,
                 valid=False,
                 error="constraints_unsatisfiable",
             )
             continue
-        plan = DevicePlan(device_id=device.device_id, target_hours=device_targets)
+        plan = DevicePlan(device_id=device.device_id, target_hours=adjusted_targets)
         for hour, active, (cost, potential_solar) in zip(hours, sequence, priced, strict=True):
             allocated = potential_solar if active else 0.0
             if active:
@@ -280,7 +525,29 @@ def build_plans(
                     import_eur_mwh=hour.import_eur_mwh,
                     export_eur_mwh=hour.export_eur_mwh,
                     allocated_solar_wh=allocated,
-                    reason="solar" if allocated else "price",
+                    reason=(
+                        "below_always_on_price"
+                        if (
+                            active
+                            and device.always_on_below_eur_mwh is not None
+                            and cost <= device.always_on_below_eur_mwh
+                        )
+                        else "minimum_hours_override"
+                        if (
+                            active
+                            and device.always_off_above_eur_mwh is not None
+                            and cost >= device.always_off_above_eur_mwh
+                        )
+                        else "above_always_off_price"
+                        if (
+                            not active
+                            and device.always_off_above_eur_mwh is not None
+                            and cost >= device.always_off_above_eur_mwh
+                        )
+                        else "solar"
+                        if allocated
+                        else "price"
+                    ),
                 )
             )
         result[device.device_id] = plan

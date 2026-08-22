@@ -46,6 +46,8 @@ class TariffConfig:
     day_start: time
     day_end: time
     weekend_night: bool = True
+    network_includes_vat: bool = False
+    holiday_country: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +62,8 @@ class PlanningDevice:
     min_on_hours: int
     min_off_hours: int
     solar_priority: int
+    always_on_below_eur_mwh: float | None = None
+    always_off_above_eur_mwh: float | None = None
 
 
 @dataclass(slots=True)
@@ -81,6 +85,8 @@ class DevicePlan:
 
     device_id: str
     target_hours: dict[date, int]
+    required_hours: dict[date, int] = field(default_factory=dict)
+    apparent_temperatures: dict[date, float] = field(default_factory=dict)
     hours: list[PlannedHour] = field(default_factory=list)
     valid: bool = True
     error: str | None = None
@@ -97,6 +103,13 @@ class DevicePlan:
         return {
             "device_id": self.device_id,
             "target_hours": {key.isoformat(): value for key, value in self.target_hours.items()},
+            "required_hours": {
+                key.isoformat(): value for key, value in self.required_hours.items()
+            },
+            "apparent_temperatures": {
+                key.isoformat(): round(value, 2)
+                for key, value in self.apparent_temperatures.items()
+            },
             "valid": self.valid,
             "error": self.error,
             "hours": [

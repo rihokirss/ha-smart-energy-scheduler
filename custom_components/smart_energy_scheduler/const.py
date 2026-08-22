@@ -14,11 +14,17 @@ CONF_SELL_MARGIN = "sell_margin"
 CONF_VAT = "vat"
 CONF_NETWORK_DAY = "network_day"
 CONF_NETWORK_NIGHT = "network_night"
+CONF_NETWORK_INCLUDES_VAT = "network_includes_vat"
 CONF_DAY_START = "day_start"
 CONF_DAY_END = "day_end"
 CONF_WEEKEND_NIGHT = "weekend_night"
 CONF_WEATHER_ENTITY = "weather_entity"
 CONF_BASE_LOAD_W = "base_load_w"
+CONF_SOLAR_FALLBACK_ENABLED = "solar_fallback_enabled"
+CONF_SOLAR_FALLBACK_START_MONTH = "solar_fallback_start_month"
+CONF_SOLAR_FALLBACK_END_MONTH = "solar_fallback_end_month"
+CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H = "solar_fallback_sunrise_delay_h"
+CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H = "solar_fallback_sunset_advance_h"
 CONF_GRID_POWER_SENSOR = "grid_power_sensor"
 CONF_PV_POWER_SENSOR = "pv_power_sensor"
 CONF_SHADOW_MODE = "shadow_mode"
@@ -35,11 +41,18 @@ CONF_WINDOW_END = "window_end"
 CONF_BASE_HOURS = "base_hours"
 CONF_MIN_HOURS = "min_hours"
 CONF_MAX_HOURS = "max_hours"
+CONF_ALWAYS_ON_BELOW = "always_on_below_eur_mwh"
+CONF_ALWAYS_OFF_ABOVE = "always_off_above_eur_mwh"
+CONF_ALWAYS_ON_BELOW_ENABLED = "always_on_below_enabled"
+CONF_ALWAYS_OFF_ABOVE_ENABLED = "always_off_above_enabled"
 CONF_MIN_ON_HOURS = "min_on_hours"
 CONF_MIN_OFF_HOURS = "min_off_hours"
 CONF_USE_WEATHER = "use_weather"
+CONF_LEGACY_WIND_CHILL = "legacy_wind_chill"
 CONF_REFERENCE_TEMPERATURE = "reference_temperature"
 CONF_HOURS_PER_DEGREE = "hours_per_degree"
+CONF_WEATHER_LOOKAHEAD_HOURS = "weather_lookahead_hours"
+CONF_PREHEAT_HOURS = "preheat_hours"
 CONF_SOLAR_PRIORITY = "solar_priority"
 CONF_FAILURE_MODE = "failure_mode"
 CONF_ENABLED = "enabled"
@@ -56,13 +69,19 @@ DEFAULT_MAIN = {
     CONF_CURRENCY: "EUR",
     CONF_BUY_MARGIN: 2.44,
     CONF_SELL_MARGIN: -4.50,
-    CONF_VAT: 22.0,
-    CONF_NETWORK_DAY: 36.9,
-    CONF_NETWORK_NIGHT: 21.0,
+    CONF_VAT: 24.0,
+    CONF_NETWORK_DAY: 75.3,
+    CONF_NETWORK_NIGHT: 43.5,
+    CONF_NETWORK_INCLUDES_VAT: True,
     CONF_DAY_START: "07:00:00",
     CONF_DAY_END: "22:00:00",
     CONF_WEEKEND_NIGHT: True,
     CONF_BASE_LOAD_W: 500.0,
+    CONF_SOLAR_FALLBACK_ENABLED: True,
+    CONF_SOLAR_FALLBACK_START_MONTH: 3,
+    CONF_SOLAR_FALLBACK_END_MONTH: 9,
+    CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H: 3.0,
+    CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H: 2.0,
     CONF_SHADOW_MODE: True,
 }
 
@@ -80,8 +99,11 @@ DEFAULT_HEAT_PUMP = {
     CONF_MIN_ON_HOURS: 1,
     CONF_MIN_OFF_HOURS: 1,
     CONF_USE_WEATHER: True,
+    CONF_LEGACY_WIND_CHILL: True,
     CONF_REFERENCE_TEMPERATURE: 6.0,
     CONF_HOURS_PER_DEGREE: 0.5,
+    CONF_WEATHER_LOOKAHEAD_HOURS: 12,
+    CONF_PREHEAT_HOURS: 0,
     CONF_SOLAR_PRIORITY: 1,
     CONF_FAILURE_MODE: FAILURE_FORCE_ON,
     CONF_ENABLED: True,
@@ -90,5 +112,6 @@ DEFAULT_HEAT_PUMP = {
 EVENT_PLAN_UPDATED = f"{DOMAIN}_plan_updated"
 SERVICE_RECALCULATE = "recalculate"
 SERVICE_SET_OVERRIDE = "set_override"
+SERVICE_UPDATE_DEVICE_SETTINGS = "update_device_settings"
 STORAGE_KEY = DOMAIN
 STORAGE_VERSION = 1

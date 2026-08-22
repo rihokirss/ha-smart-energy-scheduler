@@ -25,12 +25,23 @@ def _today(entity: SchedulerStatusSensor) -> str:
     return dt_util.now().astimezone(entity.coordinator.timezone).date().isoformat()
 
 
-def _planned(entity: SchedulerStatusSensor) -> float:
+def _remaining(entity: SchedulerStatusSensor) -> float:
+    """Return scheduled hours still ahead in today's plan."""
     plan = entity.coordinator.data.plans.get(entity.device_id) if entity.coordinator.data else None
     if not plan:
         return 0.0
     today = _today(entity)
     return float(sum(hour.active for hour in plan.hours if hour.start.date().isoformat() == today))
+
+
+def _actual(entity: SchedulerStatusSensor) -> float:
+    """Return observed active time today."""
+    return round(entity.runtime_state.actual_hours_by_day.get(_today(entity), 0.0), 2)
+
+
+def _planned(entity: SchedulerStatusSensor) -> float:
+    """Return the expected whole-day total: actual plus scheduled remainder."""
+    return float(round(_actual(entity) + _remaining(entity)))
 
 
 DESCRIPTIONS = (
@@ -46,16 +57,14 @@ DESCRIPTIONS = (
         translation_key="actual_hours",
         native_unit_of_measurement=UnitOfTime.HOURS,
         icon="mdi:progress-clock",
-        value_fn=lambda entity: round(
-            entity.runtime_state.actual_hours_by_day.get(_today(entity), 0.0), 2
-        ),
+        value_fn=_actual,
     ),
     SchedulerSensorDescription(
         key="remaining_hours",
         translation_key="remaining_hours",
         native_unit_of_measurement=UnitOfTime.HOURS,
         icon="mdi:timer-sand",
-        value_fn=_planned,
+        value_fn=_remaining,
     ),
     SchedulerSensorDescription(
         key="next_transition",

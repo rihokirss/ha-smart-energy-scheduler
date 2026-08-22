@@ -40,6 +40,7 @@ class SmartEnergySchedulerCard extends HTMLElement {
 
   disconnectedCallback() {
     if (this._unsubscribe) this._unsubscribe();
+    if (this._hourCenterTimer) clearTimeout(this._hourCenterTimer);
   }
 
   getCardSize() { return 6; }
@@ -66,21 +67,12 @@ class SmartEnergySchedulerCard extends HTMLElement {
   }
 
   _formatTime(date) {
-    const locale = this._hass?.locale || {};
-    const options = {
-      hour: "numeric",
-      minute: "2-digit",
-      hourCycle: this._useAmPm() ? "h12" : "h23",
-    };
-    if (locale.time_zone === "server" && this._hass?.config?.time_zone) {
-      options.timeZone = this._hass.config.time_zone;
-    }
-    return new Intl.DateTimeFormat(locale.language, options).format(date);
+    return this._formatHour(date);
   }
 
-  _formatDate(date) {
+  _formatHour(date) {
     const locale = this._hass?.locale || {};
-    const options = { day: "2-digit", month: "2-digit" };
+    const options = { hour: "2-digit", hourCycle: "h23" };
     if (locale.time_zone === "server" && this._hass?.config?.time_zone) {
       options.timeZone = this._hass.config.time_zone;
     }
@@ -93,6 +85,38 @@ class SmartEnergySchedulerCard extends HTMLElement {
     await this._hass.callService("smart_energy_scheduler", "set_override", data);
   }
 
+  _scheduleHourCenter() {
+    if (this._hourCenterTimer) clearTimeout(this._hourCenterTimer);
+    const delay = 3600000 - Date.now() % 3600000 + 250;
+    this._hourCenterTimer = setTimeout(() => {
+      this._centeredHourKey = null;
+      this._render();
+    }, delay);
+  }
+
+  _centerCurrentHour(hours) {
+    const now = Date.now();
+    const currentHourKey = Math.floor(now / 3600000);
+    if (this._centeredHourKey === currentHourKey) return;
+    requestAnimationFrame(() => {
+      const scroll = this.shadowRoot.querySelector(".scroll");
+      const currentIndex = hours.findIndex((hour) => {
+        const start = new Date(hour.start).getTime();
+        return start <= now && now < start + 3600000;
+      });
+      if (scroll && currentIndex >= 0) {
+        const current = scroll.querySelectorAll(".hour")[currentIndex];
+        if (current) {
+          scroll.scrollLeft = Math.max(
+            0,
+            current.offsetLeft + current.offsetWidth / 2 - scroll.clientWidth / 2,
+          );
+        }
+      }
+      this._centeredHourKey = currentHourKey;
+    });
+  }
+
   _render() {
     if (!this.data) return;
     const count = Math.max(1, Math.min(48, Number(this.config.hours) || 48));
@@ -100,13 +124,15 @@ class SmartEnergySchedulerCard extends HTMLElement {
     const prices = hours.map((h) => h.import_eur_mwh);
     const min = Math.min(...prices, 0);
     const max = Math.max(...prices, 1);
-    const columns = `repeat(${hours.length || 1}, minmax(18px, 1fr))`;
+    const columns = `repeat(${hours.length || 1}, minmax(8px, 1fr))`;
+    const now = Date.now();
     const hourCells = hours.map((h) => {
       const date = new Date(h.start);
       const label = this._formatTime(date);
+      const current = date.getTime() <= now && now < date.getTime() + 3600000;
       const title = `${date.toLocaleString()}\nOst ${h.import_eur_mwh.toFixed(1)} €/MWh\nMüük ${h.export_eur_mwh.toFixed(1)} €/MWh\nPV ${(h.pv_wh / 1000).toFixed(2)} kWh`;
       const pv = Math.min(100, h.pv_wh / Math.max(1, ...hours.map((x) => x.pv_wh)) * 100);
-      return `<div class="hour" title="${this._escape(title)}">
+      return `<div class="hour ${current ? "current" : ""}" title="${this._escape(title)}">
         <div class="price" style="height:${22 + 30 * ((h.import_eur_mwh - min) / (max - min || 1))}px;background:${this._color(h.import_eur_mwh, min, max)}"></div>
         <div class="pv" style="height:${pv * .28}px"></div><span>${label}</span>
       </div>`;
@@ -120,23 +146,25 @@ class SmartEnergySchedulerCard extends HTMLElement {
       const actual = Object.values(device.state.actual_hours_by_day || {}).slice(-1)[0] || 0;
       return `<section class="device">
         <div class="device-head"><div><strong>${this._escape(device.name)}</strong><small>${actual.toFixed(1)} h · ${this._escape(device.state.reason)}</small></div>
-        <div class="buttons"><button data-device="${id}" data-mode="auto" class="${device.state.override === "auto" ? "selected" : ""}">Auto</button><button data-device="${id}" data-mode="on" class="${device.state.override === "on" ? "selected" : ""}">ON 2h</button><button data-device="${id}" data-mode="off" class="${device.state.override === "off" ? "selected" : ""}">OFF 2h</button></div></div>
+        <div class="buttons"><ha-button size="s" variant="${device.state.override === "auto" ? "brand" : "neutral"}" appearance="${device.state.override === "auto" ? "filled" : "outlined"}" data-device="${id}" data-mode="auto">Auto</ha-button><ha-button size="s" variant="${device.state.override === "on" ? "brand" : "neutral"}" appearance="${device.state.override === "on" ? "filled" : "outlined"}" data-device="${id}" data-mode="on">ON 2h</ha-button><ha-button size="s" variant="${device.state.override === "off" ? "brand" : "neutral"}" appearance="${device.state.override === "off" ? "filled" : "outlined"}" data-device="${id}" data-mode="off">OFF 2h</ha-button></div></div>
         <div class="blocks" style="grid-template-columns:${columns}">${blocks}</div>
       </section>`;
     }).join("");
     const warnings = (this.data.warnings || []).map((item) => `<li>${this._escape(item)}</li>`).join("");
     this.shadowRoot.innerHTML = `<style>
-      :host{display:block} ha-card{padding:16px;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;gap:12px}.badge{font-size:12px;padding:4px 8px;border-radius:12px;background:var(--warning-color,#f5a623);color:#111}.badge.live{background:var(--success-color,#43a047);color:#fff}.error{padding:16px;color:var(--error-color,#db4437)}.warnings{font-size:12px;color:var(--secondary-text-color);margin:8px 0}.chart,.blocks{display:grid;gap:2px;min-width:700px}.scroll{overflow-x:auto;padding-bottom:4px}.hour{height:94px;display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;position:relative}.price{min-height:3px;border-radius:3px 3px 0 0}.pv{background:#fbc02d;min-height:0}.hour span{font-size:9px;white-space:nowrap;transform:rotate(-55deg);transform-origin:top left;margin-top:8px;color:var(--secondary-text-color)}.device{margin-top:16px}.device-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}.device small{display:block;color:var(--secondary-text-color);margin-top:2px}.block{height:22px;border-radius:3px;background:var(--divider-color,#ddd)}.block.active{background:var(--primary-color,#03a9f4)}button{border:1px solid var(--divider-color);background:transparent;color:var(--primary-text-color);padding:5px 8px;cursor:pointer}button.selected{background:var(--primary-color);color:#fff}.legend{font-size:11px;color:var(--secondary-text-color);margin-top:8px}@media(max-width:600px){.device-head{align-items:flex-start;flex-direction:column}}
+      :host{display:block} ha-card{padding:var(--ha-space-4,16px);overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;gap:var(--ha-space-3,12px)}.card-title{color:var(--ha-card-header-color,var(--primary-text-color));font-family:var(--ha-card-header-font-family,inherit);font-size:var(--ha-card-header-font-size,var(--ha-font-size-2xl,24px));font-weight:var(--ha-font-weight-normal,400);letter-spacing:-.012em;line-height:var(--ha-line-height-expanded,1.5);margin:0}.badge{font-size:var(--ha-font-size-s,12px);padding:var(--ha-space-1,4px) var(--ha-space-2,8px);border-radius:var(--ha-border-radius-pill,999px);background:var(--warning-color,#f5a623);color:#111}.badge.live{background:var(--success-color,#43a047);color:#fff}.error{padding:var(--ha-space-4,16px);color:var(--error-color,#db4437)}.warnings{font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin:var(--ha-space-2,8px) 0}.chart,.blocks{display:grid;gap:2px;min-width:480px}.scroll{overflow-x:auto;padding-bottom:var(--ha-space-1,4px)}.hour{height:94px;display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;position:relative}.price{min-height:3px;border-radius:3px 3px 0 0}.pv{background:#fbc02d;min-height:0}.hour span{font-size:11px;white-space:nowrap;text-align:center;margin-top:var(--ha-space-1,4px);color:var(--secondary-text-color)}.hour.current::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid var(--error-color,#e53935)}.device{margin-top:var(--ha-space-4,16px)}.device-head{display:flex;justify-content:flex-start;align-items:center;gap:var(--ha-space-3,12px);margin-bottom:var(--ha-space-2,8px);position:sticky;left:0;z-index:2;width:max-content;max-width:100%;padding:var(--ha-space-1,4px) var(--ha-space-2,8px) var(--ha-space-1,4px) 0;background:var(--ha-card-background,var(--card-background-color,#fff))}.device small{display:block;color:var(--secondary-text-color);margin-top:2px}.buttons{display:flex;gap:var(--ha-space-1,4px);flex-wrap:wrap}.block{height:22px;border-radius:var(--ha-border-radius-sm,4px);background:var(--divider-color,#ddd)}.block.active{background:var(--primary-color,#03a9f4)}.legend{font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin-top:var(--ha-space-2,8px)}@media(max-width:600px){.device-head{align-items:flex-start;flex-direction:column}}
     </style><ha-card>
-      <div class="top"><h2>${this._escape(this.config.title)}</h2><span class="badge ${this.data.shadow_mode ? "" : "live"}">${this.data.shadow_mode ? "VARIREŽIIM" : "JUHTIMINE AKTIIVNE"}</span></div>
+      <div class="top"><h1 class="card-title">${this._escape(this.config.title)}</h1><span class="badge ${this.data.shadow_mode ? "" : "live"}">${this.data.shadow_mode ? "VARIREŽIIM" : "JUHTIMINE AKTIIVNE"}</span></div>
       ${this.data.error ? `<div class="error">${this._escape(this.data.error)}</div>` : ""}
       ${warnings ? `<ul class="warnings">${warnings}</ul>` : ""}
       <div class="scroll"><div class="chart" style="grid-template-columns:${columns}">${hourCells}</div>${devices}</div>
       <div class="legend">Tulba värv: ostuhind · kollane: PV prognoos · sinine: seadme töötund</div>
     </ha-card>`;
-    this.shadowRoot.querySelectorAll("button[data-mode]").forEach((button) => {
+    this.shadowRoot.querySelectorAll("ha-button[data-mode]").forEach((button) => {
       button.addEventListener("click", () => this._override(button.dataset.device, button.dataset.mode));
     });
+    this._centerCurrentHour(hours);
+    this._scheduleHourCenter();
   }
 }
 
@@ -151,7 +179,7 @@ window.customCards.push({
 
 class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
   setConfig(config) {
-    super.setConfig({ title: "Elektrihind ja seadme tööplaan", hours: 48, ...config });
+    super.setConfig({ title: "Hind ja tööplaan", hours: 48, ...config });
   }
 
   _selectedDevice() {
@@ -239,9 +267,9 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
     });
     const minimum = Math.min(0, ...values);
     const maximum = Math.max(1, ...values);
-    const width = Math.max(780, hours.length * 34);
+    const width = Math.max(440, hours.length * 17);
     const chartHeight = 280;
-    const left = 44, right = 18, top = 32, bottom = 70;
+    const left = 32, right = 8, top = 32, bottom = 42;
     const plotWidth = width - left - right;
     const plotHeight = chartHeight - top - bottom;
     const step = plotWidth / Math.max(1, hours.length);
@@ -254,13 +282,12 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
       const historical = start + 3600000 <= now;
       const actual = historical ? this._actualActivity(hour, device) : null;
       const active = historical ? Boolean(actual?.active) : Boolean(slot?.active);
-      const x = left + index * step + step * .07;
       const barWidth = Math.max(3, step * .86);
+      const x = left + index * step + (step - barWidth) / 2;
       const valueY = y(hour.import_eur_mwh);
       const rectY = Math.min(valueY, baseline);
       const rectHeight = Math.max(1, Math.abs(baseline - valueY));
       const current = start <= now && now < start + 3600000;
-      const stroke = current ? (device.state.observed_active ? "#1565c0" : "#616161") : "none";
       const status = historical
         ? (actual?.active ? `Tegelikult ON (${actual.minutes.toFixed(0)} min)` : "Tegelikult OFF")
         : (active ? "Planeeritud ON" : "Planeeritud OFF");
@@ -268,7 +295,11 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
         ? (actual?.active ? "#157347" : "#9e9e9e")
         : (active ? "#25a244" : "#f59e0b");
       const tooltip = `${new Date(hour.start).toLocaleString()}\n${status}\nOstuhind ${hour.import_eur_mwh.toFixed(1)} €/MWh\nEfektiivhind ${(slot?.effective_eur_mwh ?? hour.import_eur_mwh).toFixed(1)} €/MWh\nPV ${(hour.pv_wh / 1000).toFixed(2)} kWh`;
-      return `<rect x="${x}" y="${rectY}" width="${barWidth}" height="${rectHeight}" rx="2" fill="${fill}" stroke="${stroke}" stroke-width="${current ? 3 : 0}"><title>${this._escape(tooltip)}</title></rect>`;
+      const markerX = left + index * step + step / 2;
+      const marker = current
+        ? `<path class="current-marker" d="M ${markerX - 6} ${top + 2} H ${markerX + 6} L ${markerX} ${top + 12} Z"><title>Praegune tund</title></path>`
+        : "";
+      return `<rect x="${x}" y="${rectY}" width="${barWidth}" height="${rectHeight}" rx="2" fill="${fill}"><title>${this._escape(tooltip)}</title></rect>${marker}`;
     }).join("");
     const points = hours.map((hour, index) => {
       const effective = planned.get(hour.start)?.effective_eur_mwh ?? hour.import_eur_mwh;
@@ -285,22 +316,22 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
     }).join("");
     const labels = hours.map((hour, index) => {
       const stamp = new Date(hour.start);
-      const hourLabel = this._formatTime(stamp);
-      const dateLabel = this._formatDate(stamp);
+      const hourLabel = this._formatHour(stamp);
       const x = left + index * step + step / 2;
-      const showDate = index === 0 || this._formatDate(new Date(hours[index - 1].start)) !== dateLabel;
-      return `${showDate ? `<line x1="${left + index * step}" y1="${top}" x2="${left + index * step}" y2="${baseline + 7}" stroke="var(--secondary-text-color)" opacity=".45"/><text class="date" x="${x}" y="${top - 10}" text-anchor="middle">${dateLabel}</text>` : ""}<text class="hour-label" x="${x}" y="${baseline + 24}" text-anchor="middle" transform="rotate(-45 ${x} ${baseline + 24})">${hourLabel}</text>`;
+      return `<text class="hour-label" x="${x}" y="${chartHeight - 12}" text-anchor="middle">${hourLabel}</text>`;
     }).join("");
     const stateText = device.state.observed_active === true ? "praegu sees" : device.state.observed_active === false ? "praegu väljas" : "tegelik olek teadmata";
+    const solarText = this.data.solar_source === "fallback" ? "PV varuplaan" : this.data.solar_source === "forecast" ? "PV prognoos" : "ilma PV-ta";
     this.shadowRoot.innerHTML = `<style>
-      :host{display:block}ha-card{padding:16px;overflow:hidden}.head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.head h2{margin:0 0 4px}.sub{color:var(--secondary-text-color);font-size:13px}.chart-wrap{position:relative;margin-top:12px}.scroll{overflow-x:auto;scrollbar-gutter:stable;padding-bottom:4px}svg{display:block;height:auto;max-width:none}svg text{font:12px sans-serif;fill:var(--secondary-text-color)}svg .hour-label{font-size:13px;font-weight:500;fill:var(--primary-text-color)}svg .date{font-size:13px;font-weight:700;fill:var(--primary-text-color)}.y-axis{position:absolute;z-index:2;left:0;top:0;width:40px;height:${chartHeight}px;pointer-events:none;background:var(--ha-card-background,var(--card-background-color,#fff));box-shadow:3px 0 5px -5px var(--primary-text-color)}.y-axis span{position:absolute;right:4px;transform:translateY(-50%);font-size:11px;font-weight:600;color:var(--secondary-text-color)}.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;margin-top:10px;color:var(--secondary-text-color)}.key{display:inline-flex;gap:5px;align-items:center}.swatch{width:12px;height:12px;border-radius:2px}.line{width:20px;border-top:3px solid #2196f3}.badge{font-size:11px;padding:4px 8px;border-radius:10px;background:var(--warning-color,#f5a623);color:#111}.badge.live{background:var(--success-color,#43a047);color:white}.error{padding:16px;color:var(--error-color,#db4437)}
+      :host{display:block}ha-card{padding:var(--ha-space-4,16px);overflow:hidden}.head{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--ha-space-3,12px)}.card-title{color:var(--ha-card-header-color,var(--primary-text-color));font-family:var(--ha-card-header-font-family,inherit);font-size:var(--ha-card-header-font-size,var(--ha-font-size-2xl,24px));font-weight:var(--ha-font-weight-normal,400);letter-spacing:-.012em;line-height:var(--ha-line-height-expanded,1.5);margin:0 0 var(--ha-space-1,4px)}.sub{color:var(--secondary-text-color);font-size:var(--ha-font-size-m,14px)}.chart-wrap{position:relative;margin:var(--ha-space-3,12px) 0 0 -8px;width:calc(100% + 8px)}.scroll{overflow-x:auto;padding-bottom:var(--ha-space-1,4px)}svg{display:block;height:auto;max-width:none}svg text{font-family:var(--ha-font-family-body,inherit);font-size:var(--ha-font-size-s,12px);fill:var(--secondary-text-color)}svg .hour-label{font-size:12px;font-weight:var(--ha-font-weight-medium,500);fill:var(--primary-text-color)}svg .current-marker{fill:var(--error-color,#e53935)}.y-axis{position:absolute;z-index:2;left:0;top:0;width:28px;height:${chartHeight}px;pointer-events:none;background:var(--ha-card-background,var(--card-background-color,#fff))}.y-axis span{position:absolute;right:2px;transform:translateY(-50%);font-size:11px;font-weight:var(--ha-font-weight-medium,500);color:var(--secondary-text-color)}.legend{display:flex;gap:var(--ha-space-4,16px);flex-wrap:wrap;font-size:var(--ha-font-size-m,14px);margin-top:var(--ha-space-3,12px);color:var(--secondary-text-color)}.key{display:inline-flex;gap:var(--ha-space-1,4px);align-items:center}.swatch{width:12px;height:12px;border-radius:var(--ha-border-radius-sm,4px)}.line{width:20px;border-top:3px solid #2196f3}.badge{font-size:var(--ha-font-size-s,12px);padding:var(--ha-space-1,4px) var(--ha-space-2,8px);border-radius:var(--ha-border-radius-pill,999px);background:var(--warning-color,#f5a623);color:#111}.badge.live{background:var(--success-color,#43a047);color:white}.error{padding:var(--ha-space-4,16px);color:var(--error-color,#db4437)}
     </style><ha-card>
-      <div class="head"><div><h2>${this._escape(this.config.title)}</h2><div class="sub">${this._escape(device.name)} · ${stateText} · ${this._escape(device.state.reason)}</div></div><span class="badge ${this.data.shadow_mode ? "" : "live"}">${this.data.shadow_mode ? "VARIREŽIIM" : "AKTIIVNE"}</span></div>
+      <div class="head"><div><h1 class="card-title">${this._escape(this.config.title)}</h1><div class="sub">${this._escape(device.name)} · ${stateText} · ${solarText} · ${this._escape(device.state.reason)}</div></div><span class="badge ${this.data.shadow_mode ? "" : "live"}">${this.data.shadow_mode ? "VARIREŽIIM" : "AKTIIVNE"}</span></div>
       ${this.data.error ? `<div class="error">${this._escape(this.data.error)}</div>` : ""}
       <div class="chart-wrap"><div class="y-axis" aria-label="Hinnaskaala eurot megavatt-tunni kohta">${yAxisLabels}</div><div class="scroll"><svg style="width:${width}px" viewBox="0 0 ${width} ${chartHeight}" role="img" aria-label="Elektrihinna ja seadme tööplaani graafik">${grid}<line x1="${left}" y1="${baseline}" x2="${width - right}" y2="${baseline}" stroke="var(--primary-text-color)"/>${bars}<polyline points="${points}" fill="none" stroke="#2196f3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>${labels}</svg></div></div>
-      <div class="legend"><span class="key"><i class="swatch" style="background:#157347"></i>tegelikult ON</span><span class="key"><i class="swatch" style="background:#9e9e9e"></i>möödunud OFF</span><span class="key"><i class="swatch" style="background:#25a244"></i>planeeritud ON</span><span class="key"><i class="swatch" style="background:#f59e0b"></i>planeeritud OFF</span><span class="key"><i class="line"></i>efektiivhind koos PV-ga</span><span>tulba kõrgus: ostuhind €/MWh</span></div>
+      <div class="legend"><span class="key"><i class="swatch" style="background:#157347"></i>tegelikult ON</span><span class="key"><i class="swatch" style="background:#9e9e9e"></i>möödunud OFF</span><span class="key"><i class="swatch" style="background:#25a244"></i>planeeritud ON</span><span class="key"><i class="swatch" style="background:#f59e0b"></i>planeeritud OFF</span><span class="key"><i class="line"></i>efektiivhind koos PV-ga</span></div>
     </ha-card>`;
-    if (!this._initialScrollDone) {
+    const currentHourKey = Math.floor(now / 3600000);
+    if (this._centeredHourKey !== currentHourKey) {
       requestAnimationFrame(() => {
         const scroll = this.shadowRoot.querySelector(".scroll");
         const currentIndex = hours.findIndex((hour) => {
@@ -311,9 +342,10 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
           const currentX = left + currentIndex * step + step / 2;
           scroll.scrollLeft = Math.max(0, currentX - scroll.clientWidth / 2);
         }
-        this._initialScrollDone = true;
+        this._centeredHourKey = currentHourKey;
       });
     }
+    this._scheduleHourCenter();
   }
 }
 
@@ -322,5 +354,165 @@ window.customCards.push({
   type: "smart-energy-price-plan-card",
   name: "Smart Energy Price & Device Plan",
   description: "Price bars colored by planned device activity",
+  preview: true,
+});
+
+class SmartEnergyHeatingCurveCard extends SmartEnergySchedulerCard {
+  setConfig(config) {
+    super.setConfig({ title: "Soojuspumba küttekõver", ...config });
+  }
+
+  _selectedDevice() {
+    const entries = Object.entries(this.data?.devices || {});
+    return entries.find(([id, device]) =>
+      id === this.config.device_id ||
+      device.name === this.config.device ||
+      device.target_entity === this.config.target_entity
+    ) || entries[0];
+  }
+
+  _curveHours(temperature, settings) {
+    const calculated = Number(settings.base_hours) +
+      (Number(settings.reference_temperature) - temperature) * Number(settings.hours_per_degree);
+    return Math.max(Number(settings.min_hours), Math.min(Number(settings.max_hours), Math.round(calculated)));
+  }
+
+  async _saveSettings(deviceId) {
+    const payload = { device_id: deviceId, entry_id: this.data.entry_id };
+    this.shadowRoot.querySelectorAll("[data-setting]").forEach((input) => {
+      const enable = this.shadowRoot.querySelector(`[data-enable="${input.dataset.setting}"]`);
+      if (enable) {
+        payload[`${input.dataset.setting.replace("_eur_mwh", "")}_enabled`] = enable.checked;
+        if (!enable.checked) return;
+      }
+      payload[input.dataset.setting] = input.localName === "ha-switch" ? input.checked : Number(input.value);
+    });
+    const status = this.shadowRoot.querySelector(".save-status");
+    if (payload.min_hours > payload.max_hours) {
+      status.textContent = "Miinimum ei tohi olla maksimumist suurem.";
+      status.classList.add("error");
+      return;
+    }
+    if (payload.always_on_below_enabled && payload.always_off_above_enabled &&
+        payload.always_on_below_eur_mwh >= payload.always_off_above_eur_mwh) {
+      status.textContent = "Alati-ON hinnapiir peab olema madalam kui alati-OFF hinnapiir.";
+      status.classList.add("error");
+      return;
+    }
+    status.textContent = "Salvestan…";
+    status.classList.remove("error");
+    try {
+      await this._hass.callService("smart_energy_scheduler", "update_device_settings", payload);
+      status.textContent = "Salvestatud. Uus plaan arvutatakse…";
+    } catch (err) {
+      status.textContent = `Salvestamine ebaõnnestus: ${err.message || err}`;
+      status.classList.add("error");
+    }
+  }
+
+  _render() {
+    if (!this.data) return;
+    const selected = this._selectedDevice();
+    if (!selected) {
+      this.shadowRoot.innerHTML = `<ha-card><div class="error">Ühtegi juhitavat seadet ei ole seadistatud.</div></ha-card>`;
+      return;
+    }
+    const [deviceId, device] = selected;
+    const settings = device.settings || {};
+    const plan = device.plan || {};
+    const temperatures = plan.apparent_temperatures || {};
+    const required = plan.required_hours || {};
+    const width = 680, height = 310, left = 52, right = 18, top = 28, bottom = 52;
+    const minimumTemperature = Number(this.config.min_temperature ?? -25);
+    const maximumTemperature = Number(this.config.max_temperature ?? 25);
+    const maximumHours = Math.max(24, Number(settings.max_hours || 24));
+    const x = (temperature) => left +
+      (temperature - minimumTemperature) / (maximumTemperature - minimumTemperature) *
+      (width - left - right);
+    const y = (hours) => top + (maximumHours - hours) / maximumHours * (height - top - bottom);
+    const curve = [];
+    for (let temperature = minimumTemperature; temperature <= maximumTemperature; temperature += .5) {
+      curve.push(`${x(temperature)},${y(this._curveHours(temperature, settings))}`);
+    }
+    const horizontalGrid = [0, 6, 12, 18, 24].map((hours) =>
+      `<line x1="${left}" y1="${y(hours)}" x2="${width - right}" y2="${y(hours)}" stroke="var(--divider-color,#ddd)" stroke-dasharray="3 3"/><text class="axis-label" x="${left - 8}" y="${y(hours) + 5}" text-anchor="end">${hours} h</text>`
+    ).join("");
+    const verticalGrid = [-20, -10, 0, 10, 20].filter((value) =>
+      value >= minimumTemperature && value <= maximumTemperature
+    ).map((temperature) =>
+      `<line x1="${x(temperature)}" y1="${top}" x2="${x(temperature)}" y2="${height - bottom}" stroke="var(--divider-color,#ddd)" stroke-dasharray="3 3"/><text class="axis-label" x="${x(temperature)}" y="${height - bottom + 25}" text-anchor="middle">${temperature} °C</text>`
+    ).join("");
+    const forecastPoints = Object.entries(temperatures).map(([day, temperature], index) => {
+      const hours = required[day] ?? this._curveHours(Number(temperature), settings);
+      const color = index === 0 ? "#ef6c00" : "#7b1fa2";
+      return `<g><circle cx="${x(Number(temperature))}" cy="${y(Number(hours))}" r="7" fill="${color}" stroke="var(--card-background-color,#fff)" stroke-width="2"><title>${this._escape(day)}: ${Number(temperature).toFixed(1)} °C → ${hours} h</title></circle><text x="${x(Number(temperature)) + 10}" y="${y(Number(hours)) - 9}" class="point-label">${this._escape(day)} · ${Number(temperature).toFixed(1)}° · ${hours}h</text></g>`;
+    }).join("");
+    const fields = [
+      ["base_hours", "Baastunnid", 0, 25, 1, "h"],
+      ["reference_temperature", "Referentstemperatuur", -30, 30, .5, "°C"],
+      ["hours_per_degree", "Mõju kraadi kohta", 0, 5, .1, "h/°C"],
+      ["min_hours", "Miinimum", 0, 25, 1, "h"],
+      ["max_hours", "Maksimum", 0, 25, 1, "h"],
+      ["weather_lookahead_hours", "Keskmistamise aken", 1, 48, 1, "h"],
+      ["preheat_hours", "Prognoosiakna nihe tulevikku", 0, 24, 1, "h"],
+    ].map(([key, label, min, max, step, unit]) => {
+      const value = Number(settings[key] ?? 0);
+      return `<label class="slider"><span><b>${label}</b><output data-value="${key}">${value} ${unit}</output></span><ha-slider data-setting="${key}" data-value="${value}" data-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${value}" with-tooltip></ha-slider></label>`;
+    }).join("");
+    const priceFields = [
+      ["always_on_below_eur_mwh", "Alati sees hinnaga kuni", 0, 1000, 5, "€/MWh", 0],
+      ["always_off_above_eur_mwh", "Alati väljas hinnaga alates", 0, 1000, 5, "€/MWh", 500],
+    ].map(([key, label, min, max, step, unit, fallback]) => {
+      const enabled = settings[key] !== null && settings[key] !== undefined;
+      const value = enabled ? Number(settings[key]) : fallback;
+      return `<label class="slider optional-price"><span><b>${label}</b><span class="price-value"><ha-switch data-enable="${key}" ${enabled ? "checked" : ""}></ha-switch><output data-value="${key}">${value} ${unit}</output></span></span><ha-slider data-setting="${key}" data-value="${value}" data-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${value}" ${enabled ? "" : "disabled"} with-tooltip></ha-slider></label>`;
+    }).join("");
+    const realFeelMode = `<ha-switch class="check" data-setting="legacy_wind_chill" ${settings.legacy_wind_chill !== false ? "checked" : ""}>Kasuta varasema YAML-i tuulekülma arvutust</ha-switch>`;
+    const summary = Object.entries(temperatures).map(([day, temperature]) =>
+      `${day}: ${Number(temperature).toFixed(1)} °C → ${required[day] ?? "–"} h`
+    ).join(" · ");
+    this.shadowRoot.innerHTML = `<style>
+      :host{display:block;min-width:0}ha-card{padding:var(--ha-space-4,16px);overflow:hidden}.head{display:flex;justify-content:space-between;gap:var(--ha-space-3,12px);align-items:flex-start}.card-title{color:var(--ha-card-header-color,var(--primary-text-color));font-family:var(--ha-card-header-font-family,inherit);font-size:var(--ha-card-header-font-size,var(--ha-font-size-2xl,24px));font-weight:var(--ha-font-weight-normal,400);letter-spacing:-.012em;line-height:var(--ha-line-height-expanded,1.5);margin:0 0 var(--ha-space-1,4px)}.sub,.note,.save-status{font-size:var(--ha-font-size-m,14px);color:var(--secondary-text-color)}.chart{overflow:hidden;margin-top:var(--ha-space-3,12px);width:100%;min-width:0}svg{display:block;width:100%;max-width:100%;min-width:0;height:auto}svg text{font-family:var(--ha-font-family-body,inherit);font-size:12px;fill:var(--secondary-text-color)}svg .axis-label{font-size:16px;font-weight:var(--ha-font-weight-normal,400);fill:var(--primary-text-color)}svg .point-label{font-size:14px;font-weight:var(--ha-font-weight-medium,500);fill:var(--primary-text-color)}.settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--ha-space-4,16px);margin-top:var(--ha-space-4,16px)}.slider{display:block;min-width:0}.slider>span{display:flex;justify-content:space-between;align-items:baseline;gap:var(--ha-space-2,8px);font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin-bottom:var(--ha-space-1,4px)}.slider b{font-weight:var(--ha-font-weight-normal,400)}.slider output{color:var(--primary-text-color);white-space:nowrap}.slider ha-slider{display:block;width:100%;min-width:0}.price-value{display:flex;align-items:center;gap:var(--ha-space-2,8px)}.price-value ha-switch{transform:scale(.85)}.settings .check{grid-column:1/-1;color:var(--primary-text-color);font-size:var(--ha-font-size-m,14px)}.actions{display:flex;align-items:center;gap:var(--ha-space-3,12px);margin-top:var(--ha-space-4,16px)}.save-status.error,.error{color:var(--error-color,#db4437)}.formula{font-family:var(--ha-font-family-code,monospace);font-size:var(--ha-font-size-m,14px);color:var(--secondary-text-color);margin-top:var(--ha-space-2,8px)}.badge{font-size:var(--ha-font-size-s,12px);padding:var(--ha-space-1,4px) var(--ha-space-2,8px);border-radius:var(--ha-border-radius-pill,999px);background:var(--warning-color,#f5a623);color:#111}.badge.live{background:var(--success-color,#43a047);color:#fff}@media(max-width:600px){ha-card{padding:var(--ha-space-3,12px)}.settings{grid-template-columns:minmax(0,1fr)}.head{gap:var(--ha-space-2,8px)}}
+    </style><ha-card>
+      <div class="head"><div><h1 class="card-title">${this._escape(this.config.title)}</h1><div class="sub">${this._escape(device.name)} · ${this._escape(summary || "prognoos puudub")}</div><div class="formula">tunnid = ${Number(settings.base_hours)} + (${Number(settings.reference_temperature)} − temperatuur) × ${Number(settings.hours_per_degree)}</div></div><span class="badge ${this.data.shadow_mode ? "" : "live"}">${this.data.shadow_mode ? "VARIREŽIIM" : "AKTIIVNE"}</span></div>
+      <div class="chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Küttekõver: töötunnid sõltuvalt näivast välistemperatuurist">${horizontalGrid}${verticalGrid}<polyline points="${curve.join(" ")}" fill="none" stroke="#2196f3" stroke-width="4" stroke-linejoin="round"/>${forecastPoints}</svg></div>
+      <div class="note">RealFeel-keskmine: ${Number(settings.weather_lookahead_hours)} h prognoosiaken, algus ${Number(settings.preheat_hours)} h ettepoole. Oranž/lilla punkt näitab prognoosist arvutatud vajadust.</div>
+      <div class="settings">${fields}${priceFields}${realFeelMode}</div>
+      <div class="note">Hinnapiirid kasutavad seadme efektiivhinda koos tariifide, käibemaksu ja PV prognoosiga. Päeva miinimumtunnid võivad alati-väljas piiri ohutuse huvides ületada.</div>
+      <div class="actions"><ha-button class="save" variant="brand" appearance="filled">Rakenda ja arvuta plaan uuesti</ha-button><span class="save-status"></span></div>
+    </ha-card>`;
+    const legacySwitch = this.shadowRoot.querySelector("ha-switch[data-setting]");
+    if (legacySwitch) legacySwitch.checked = settings.legacy_wind_chill !== false;
+    this.shadowRoot.querySelector("ha-button.save").addEventListener("click", () =>
+      this._saveSettings(deviceId)
+    );
+    this.shadowRoot.querySelectorAll("ha-slider[data-setting]").forEach((input) => {
+      input.min = Number(input.getAttribute("min"));
+      input.max = Number(input.getAttribute("max"));
+      input.step = Number(input.getAttribute("step"));
+      input.value = Number(input.dataset.value);
+      input.addEventListener("input", () => {
+        const output = this.shadowRoot.querySelector(`output[data-value="${input.dataset.setting}"]`);
+        if (output) output.textContent = `${input.value} ${input.dataset.unit}`;
+      });
+    });
+    this.shadowRoot.querySelectorAll("ha-switch[data-enable]").forEach((enable) => {
+      enable.checked = enable.hasAttribute("checked");
+      const slider = this.shadowRoot.querySelector(
+        `ha-slider[data-setting="${enable.dataset.enable}"]`
+      );
+      if (slider) slider.disabled = !enable.checked;
+      enable.addEventListener("change", () => {
+        if (slider) slider.disabled = !enable.checked;
+      });
+    });
+  }
+}
+
+customElements.define("smart-energy-heating-curve-card", SmartEnergyHeatingCurveCard);
+window.customCards.push({
+  type: "smart-energy-heating-curve-card",
+  name: "Smart Energy Heating Curve",
+  description: "Editable weather-to-runtime curve with forecast points",
   preview: true,
 });

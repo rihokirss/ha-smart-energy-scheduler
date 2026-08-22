@@ -16,6 +16,8 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_ALWAYS_OFF_ABOVE,
+    CONF_ALWAYS_ON_BELOW,
     CONF_AREA,
     CONF_BASE_HOURS,
     CONF_BASE_LOAD_W,
@@ -29,25 +31,34 @@ from .const import (
     CONF_GRID_POWER_SENSOR,
     CONF_HOURS_PER_DEGREE,
     CONF_INVERTED,
+    CONF_LEGACY_WIND_CHILL,
     CONF_MAX_HOURS,
     CONF_MIN_HOURS,
     CONF_MIN_OFF_HOURS,
     CONF_MIN_ON_HOURS,
     CONF_NETWORK_DAY,
+    CONF_NETWORK_INCLUDES_VAT,
     CONF_NETWORK_NIGHT,
     CONF_NOMINAL_POWER_W,
     CONF_POWER_MULTIPLIER,
     CONF_POWER_SENSOR,
+    CONF_PREHEAT_HOURS,
     CONF_PV_POWER_SENSOR,
     CONF_REFERENCE_TEMPERATURE,
     CONF_SELL_MARGIN,
     CONF_SHADOW_MODE,
+    CONF_SOLAR_FALLBACK_ENABLED,
+    CONF_SOLAR_FALLBACK_END_MONTH,
+    CONF_SOLAR_FALLBACK_START_MONTH,
+    CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H,
+    CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H,
     CONF_SOLAR_PRIORITY,
     CONF_TARGET_ENTITY,
     CONF_TARIFF_CONFIRMED,
     CONF_USE_WEATHER,
     CONF_VAT,
     CONF_WEATHER_ENTITY,
+    CONF_WEATHER_LOOKAHEAD_HOURS,
     CONF_WEEKEND_NIGHT,
     CONF_WINDOW_END,
     CONF_WINDOW_START,
@@ -84,13 +95,17 @@ def _main_schema(defaults: dict[str, Any]) -> vol.Schema:
         vol.Required(CONF_SELL_MARGIN, default=defaults.get(CONF_SELL_MARGIN, -4.5)): _number(
             -500, 500, 0.01, "EUR/MWh"
         ),
-        vol.Required(CONF_VAT, default=defaults.get(CONF_VAT, 22.0)): _number(0, 100, 0.1, "%"),
-        vol.Required(CONF_NETWORK_DAY, default=defaults.get(CONF_NETWORK_DAY, 36.9)): _number(
+        vol.Required(CONF_VAT, default=defaults.get(CONF_VAT, 24.0)): _number(0, 100, 0.1, "%"),
+        vol.Required(CONF_NETWORK_DAY, default=defaults.get(CONF_NETWORK_DAY, 75.3)): _number(
             0, 1000, 0.1, "EUR/MWh"
         ),
-        vol.Required(CONF_NETWORK_NIGHT, default=defaults.get(CONF_NETWORK_NIGHT, 21.0)): _number(
+        vol.Required(CONF_NETWORK_NIGHT, default=defaults.get(CONF_NETWORK_NIGHT, 43.5)): _number(
             0, 1000, 0.1, "EUR/MWh"
         ),
+        vol.Required(
+            CONF_NETWORK_INCLUDES_VAT,
+            default=defaults.get(CONF_NETWORK_INCLUDES_VAT, True),
+        ): selector.BooleanSelector(),
         vol.Required(
             CONF_DAY_START, default=defaults.get(CONF_DAY_START, "07:00:00")
         ): selector.TimeSelector(),
@@ -106,6 +121,26 @@ def _main_schema(defaults: dict[str, Any]) -> vol.Schema:
         vol.Required(CONF_BASE_LOAD_W, default=defaults.get(CONF_BASE_LOAD_W, 500.0)): _number(
             0, 50000, 10, "W"
         ),
+        vol.Required(
+            CONF_SOLAR_FALLBACK_ENABLED,
+            default=defaults.get(CONF_SOLAR_FALLBACK_ENABLED, True),
+        ): selector.BooleanSelector(),
+        vol.Required(
+            CONF_SOLAR_FALLBACK_START_MONTH,
+            default=defaults.get(CONF_SOLAR_FALLBACK_START_MONTH, 3),
+        ): _number(1, 12, 1),
+        vol.Required(
+            CONF_SOLAR_FALLBACK_END_MONTH,
+            default=defaults.get(CONF_SOLAR_FALLBACK_END_MONTH, 9),
+        ): _number(1, 12, 1),
+        vol.Required(
+            CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H,
+            default=defaults.get(CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H, 3.0),
+        ): _number(0, 12, 0.5, "h"),
+        vol.Required(
+            CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H,
+            default=defaults.get(CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H, 2.0),
+        ): _number(0, 12, 0.5, "h"),
         vol.Optional(
             CONF_GRID_POWER_SENSOR, default=defaults.get(CONF_GRID_POWER_SENSOR)
         ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
@@ -172,6 +207,12 @@ def _device_schema(defaults: dict[str, Any]) -> vol.Schema:
         vol.Required(CONF_MAX_HOURS, default=defaults.get(CONF_MAX_HOURS, 24.0)): _number(
             0, 25, 1, "h"
         ),
+        vol.Optional(CONF_ALWAYS_ON_BELOW, default=defaults.get(CONF_ALWAYS_ON_BELOW)): _number(
+            0, 1000, 1, "EUR/MWh"
+        ),
+        vol.Optional(CONF_ALWAYS_OFF_ABOVE, default=defaults.get(CONF_ALWAYS_OFF_ABOVE)): _number(
+            0, 1000, 1, "EUR/MWh"
+        ),
         vol.Required(CONF_MIN_ON_HOURS, default=defaults.get(CONF_MIN_ON_HOURS, 1)): _number(
             1, 24, 1, "h"
         ),
@@ -182,11 +223,22 @@ def _device_schema(defaults: dict[str, Any]) -> vol.Schema:
             CONF_USE_WEATHER, default=defaults.get(CONF_USE_WEATHER, False)
         ): selector.BooleanSelector(),
         vol.Required(
+            CONF_LEGACY_WIND_CHILL,
+            default=defaults.get(CONF_LEGACY_WIND_CHILL, True),
+        ): selector.BooleanSelector(),
+        vol.Required(
             CONF_REFERENCE_TEMPERATURE, default=defaults.get(CONF_REFERENCE_TEMPERATURE, 6.0)
         ): _number(-50, 50, 0.5, "°C"),
         vol.Required(
             CONF_HOURS_PER_DEGREE, default=defaults.get(CONF_HOURS_PER_DEGREE, 0.5)
         ): _number(0, 5, 0.1, "h/°C"),
+        vol.Required(
+            CONF_WEATHER_LOOKAHEAD_HOURS,
+            default=defaults.get(CONF_WEATHER_LOOKAHEAD_HOURS, 12),
+        ): _number(1, 48, 1, "h"),
+        vol.Required(CONF_PREHEAT_HOURS, default=defaults.get(CONF_PREHEAT_HOURS, 0)): _number(
+            0, 24, 1, "h"
+        ),
         vol.Required(CONF_SOLAR_PRIORITY, default=defaults.get(CONF_SOLAR_PRIORITY, 1)): _number(
             1, 100, 1
         ),
@@ -222,6 +274,10 @@ def _device_error(data: dict[str, Any]) -> str | None:
     """Validate relationships which selectors cannot express."""
     if float(data[CONF_MIN_HOURS]) > float(data[CONF_MAX_HOURS]):
         return "invalid_hour_limits"
+    always_on = data.get(CONF_ALWAYS_ON_BELOW)
+    always_off = data.get(CONF_ALWAYS_OFF_ABOVE)
+    if always_on is not None and always_off is not None and float(always_on) >= float(always_off):
+        return "invalid_price_limits"
     return None
 
 

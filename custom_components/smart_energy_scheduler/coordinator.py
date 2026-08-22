@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -13,14 +12,22 @@ from typing import Any
 from homeassistant.components.energy.data import async_get_manager
 from homeassistant.components.energy.websocket_api import async_get_energy_platforms
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import (
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    SUN_EVENT_SUNRISE,
+    SUN_EVENT_SUNSET,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_component import DATA_INSTANCES
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_ALWAYS_OFF_ABOVE,
+    CONF_ALWAYS_ON_BELOW,
     CONF_AREA,
     CONF_BASE_HOURS,
     CONF_BASE_LOAD_W,
@@ -33,23 +40,32 @@ from .const import (
     CONF_FEEDBACK_ENTITY,
     CONF_HOURS_PER_DEGREE,
     CONF_INVERTED,
+    CONF_LEGACY_WIND_CHILL,
     CONF_MAX_HOURS,
     CONF_MIN_HOURS,
     CONF_MIN_OFF_HOURS,
     CONF_MIN_ON_HOURS,
     CONF_NETWORK_DAY,
+    CONF_NETWORK_INCLUDES_VAT,
     CONF_NETWORK_NIGHT,
     CONF_NOMINAL_POWER_W,
     CONF_POWER_MULTIPLIER,
     CONF_POWER_SENSOR,
+    CONF_PREHEAT_HOURS,
     CONF_REFERENCE_TEMPERATURE,
     CONF_SELL_MARGIN,
     CONF_SHADOW_MODE,
+    CONF_SOLAR_FALLBACK_ENABLED,
+    CONF_SOLAR_FALLBACK_END_MONTH,
+    CONF_SOLAR_FALLBACK_START_MONTH,
+    CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H,
+    CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H,
     CONF_SOLAR_PRIORITY,
     CONF_TARGET_ENTITY,
     CONF_USE_WEATHER,
     CONF_VAT,
     CONF_WEATHER_ENTITY,
+    CONF_WEATHER_LOOKAHEAD_HOURS,
     CONF_WEEKEND_NIGHT,
     CONF_WINDOW_END,
     CONF_WINDOW_START,
@@ -66,8 +82,11 @@ from .const import (
 )
 from .engine import (
     aggregate_hourly,
+    apply_solar_window_fallback,
     build_plans,
+    forecast_window_average,
     is_in_window,
+    legacy_wind_chill,
     merge_solar_forecast,
     output_should_be_on,
     parse_datetime,
@@ -88,6 +107,7 @@ class SchedulerData:
     plans: dict[str, DevicePlan] = field(default_factory=dict)
     temperatures: dict[str, float] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    solar_source: str = "none"
     error: str | None = None
 
 
@@ -207,6 +227,8 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             day_start=day_start,
             day_end=day_end,
             weekend_night=bool(data[CONF_WEEKEND_NIGHT]),
+            network_includes_vat=bool(data.get(CONF_NETWORK_INCLUDES_VAT, False)),
+            holiday_country=str(data.get(CONF_AREA) or "").upper() or None,
         )
 
     async def _async_fetch_prices(self, day: date) -> Any:
@@ -245,18 +267,21 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                 result.append(forecast["wh_hours"])
         return result
 
-    async def _async_fetch_weather(self) -> tuple[dict[date, float], list[str]]:
-        """Average hourly apparent temperature by local date."""
+    async def _async_fetch_weather(
+        self,
+    ) -> tuple[list[tuple[datetime, float]], list[tuple[datetime, float]], list[str]]:
+        """Return provider and legacy wind-adjusted forecast samples."""
         entity_id = self.entry.data.get(CONF_WEATHER_ENTITY)
         if not entity_id:
-            return {}, ["weather_entity_not_configured"]
+            return [], [], ["weather_entity_not_configured"]
         component = self.hass.data.get(DATA_INSTANCES, {}).get("weather")
         entity = component.get_entity(entity_id) if component else None
         if entity is None:
             raise RuntimeError(f"Weather entity {entity_id} is not loaded")
         native_forecasts = await entity.async_forecast_hourly()
         forecasts = entity._convert_forecast(native_forecasts or [])  # noqa: SLF001
-        grouped: dict[date, list[float]] = defaultdict(list)
+        samples: list[tuple[datetime, float]] = []
+        legacy_samples: list[tuple[datetime, float]] = []
         fallback_used = False
         for item in forecasts:
             stamp = item.get("datetime")
@@ -267,9 +292,18 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                 value = item.get("temperature")
                 fallback_used = value is not None or fallback_used
             if value is not None:
-                grouped[parse_datetime(stamp).astimezone(self.timezone).date()].append(float(value))
+                parsed_stamp = parse_datetime(stamp).astimezone(self.timezone)
+                samples.append((parsed_stamp, float(value)))
+                temperature = item.get("temperature")
+                wind_speed = item.get("wind_speed")
+                legacy_value = (
+                    legacy_wind_chill(float(temperature), float(wind_speed))
+                    if temperature is not None and wind_speed is not None
+                    else float(value)
+                )
+                legacy_samples.append((parsed_stamp, legacy_value))
         warnings = ["weather_apparent_temperature_fallback"] if fallback_used else []
-        return {day: sum(values) / len(values) for day, values in grouped.items()}, warnings
+        return samples, legacy_samples, warnings
 
     async def _async_update_data(self) -> SchedulerData:
         """Fetch inputs and calculate a complete, non-commanding plan."""
@@ -346,26 +380,36 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             _LOGGER.warning("Unable to build price horizon: %s", err)
             return SchedulerData(generated_at=now, error=f"price_data: {err}")
 
-        solar_ok = False
+        solar_missing = False
+        solar: list[Mapping[str, float]] = []
         try:
             solar = await self._async_fetch_solar()
-            if not solar:
+            if not any(provider for provider in solar):
                 warnings.append("solar_forecast_missing")
-            else:
-                solar_ok = True
-            merge_solar_forecast(hours, solar, float(self.entry.data[CONF_BASE_LOAD_W]))
+                solar_missing = True
         except Exception as err:  # noqa: BLE001
             warnings.append(f"solar_forecast_error: {err}")
+            solar_missing = True
+        merge_solar_forecast(hours, solar, float(self.entry.data[CONF_BASE_LOAD_W]))
+        solar_source = "price_only" if solar_missing else "forecast"
 
         try:
-            temperatures, weather_warnings = await self._async_fetch_weather()
+            (
+                weather_samples,
+                legacy_weather_samples,
+                weather_warnings,
+            ) = await self._async_fetch_weather()
             warnings.extend(weather_warnings)
         except Exception as err:  # noqa: BLE001
-            temperatures = {}
+            weather_samples = []
+            legacy_weather_samples = []
             warnings.append(f"weather_forecast_error: {err}")
 
         planning_devices: list[PlanningDevice] = []
         targets: dict[str, dict[date, int]] = {}
+        minimum_targets: dict[str, dict[date, int]] = {}
+        required_hours: dict[str, dict[date, int]] = {}
+        apparent_temperatures: dict[str, dict[date, float]] = {}
         available_days = sorted({hour.start.date() for hour in planning_hours})
         for subentry in self.device_subentries:
             data = subentry.data
@@ -397,11 +441,37 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     min_on_hours=int(data[CONF_MIN_ON_HOURS]),
                     min_off_hours=int(data[CONF_MIN_OFF_HOURS]),
                     solar_priority=int(data[CONF_SOLAR_PRIORITY]),
+                    always_on_below_eur_mwh=(
+                        float(data[CONF_ALWAYS_ON_BELOW]) if CONF_ALWAYS_ON_BELOW in data else None
+                    ),
+                    always_off_above_eur_mwh=(
+                        float(data[CONF_ALWAYS_OFF_ABOVE])
+                        if CONF_ALWAYS_OFF_ABOVE in data
+                        else None
+                    ),
                 )
             )
             target_by_day: dict[date, int] = {}
+            minimum_by_day: dict[date, int] = {}
+            required_by_day: dict[date, int] = {}
+            apparent_by_day: dict[date, float] = {}
             for day in available_days:
-                apparent = temperatures.get(day) if data[CONF_USE_WEATHER] else None
+                apparent = (
+                    forecast_window_average(
+                        legacy_weather_samples
+                        if data.get(CONF_LEGACY_WIND_CHILL, True)
+                        else weather_samples,
+                        day,
+                        now,
+                        self.timezone,
+                        float(data.get(CONF_WEATHER_LOOKAHEAD_HOURS, 12)),
+                        float(data.get(CONF_PREHEAT_HOURS, 0)),
+                    )
+                    if data[CONF_USE_WEATHER]
+                    else None
+                )
+                if apparent is not None:
+                    apparent_by_day[day] = apparent
                 target = weather_target_hours(
                     float(data[CONF_BASE_HOURS]),
                     float(data[CONF_REFERENCE_TEMPERATURE]),
@@ -410,6 +480,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     float(data[CONF_MIN_HOURS]),
                     float(data[CONF_MAX_HOURS]),
                 )
+                required_by_day[day] = target
                 actual = self.states[device_id].actual_hours_by_day.get(day.isoformat(), 0.0)
                 available = sum(
                     is_in_window(hour.start, window_start, window_end)
@@ -417,6 +488,10 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     if hour.start.date() == day
                 )
                 remaining = max(0, round(target - actual)) if day == now.date() else target
+                minimum = round(float(data[CONF_MIN_HOURS]))
+                minimum_remaining = (
+                    max(0, round(minimum - actual)) if day == now.date() else minimum
+                )
                 state = self.states[device_id]
                 current_hour = now.replace(minute=0, second=0, microsecond=0)
                 if (
@@ -428,7 +503,39 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                 ):
                     remaining = max(1, remaining)
                 target_by_day[day] = min(remaining, available)
+                minimum_by_day[day] = min(minimum_remaining, available)
             targets[device_id] = target_by_day
+            minimum_targets[device_id] = minimum_by_day
+            required_hours[device_id] = required_by_day
+            apparent_temperatures[device_id] = apparent_by_day
+
+        if solar_missing and self.entry.data.get(CONF_SOLAR_FALLBACK_ENABLED, True):
+            try:
+                sun_events: dict[date, tuple[datetime | None, datetime | None]] = {}
+                for day in {hour.start.date() for hour in hours}:
+                    sun_events[day] = (
+                        get_astral_event_date(self.hass, SUN_EVENT_SUNRISE, day),
+                        get_astral_event_date(self.hass, SUN_EVENT_SUNSET, day),
+                    )
+                fallback_hours = apply_solar_window_fallback(
+                    hours,
+                    sun_events,
+                    float(self.entry.data[CONF_BASE_LOAD_W]),
+                    sum(device.nominal_power_w for device in planning_devices),
+                    int(self.entry.data.get(CONF_SOLAR_FALLBACK_START_MONTH, 3)),
+                    int(self.entry.data.get(CONF_SOLAR_FALLBACK_END_MONTH, 9)),
+                    float(self.entry.data.get(CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H, 3)),
+                    float(self.entry.data.get(CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H, 2)),
+                )
+                if fallback_hours:
+                    solar_source = "fallback"
+                    warnings.append("solar_fallback_active")
+                else:
+                    warnings.append("solar_fallback_no_active_hours")
+            except Exception as err:  # noqa: BLE001
+                warnings.append(f"solar_fallback_error: {err}")
+        elif solar_missing:
+            warnings.append("solar_fallback_disabled")
 
         current_hour = now.replace(minute=0, second=0, microsecond=0)
         forced_states: dict[str, dict[float, bool]] = {}
@@ -443,22 +550,29 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     forced_states[subentry.subentry_id] = {
                         current_hour.timestamp(): state.locked_active
                     }
-        plans = build_plans(planning_hours, planning_devices, targets, forced_states)
+        plans = build_plans(
+            planning_hours,
+            planning_devices,
+            targets,
+            forced_states,
+            minimum_targets,
+        )
         for subentry in self.device_subentries:
             plan = plans.get(subentry.subentry_id)
             if plan is None:
                 continue
             missing_weather = bool(subentry.data[CONF_USE_WEATHER]) and any(
-                day not in temperatures for day in available_days
+                day not in apparent_temperatures.get(subentry.subentry_id, {})
+                for day in available_days
             )
-            if not solar_ok or missing_weather:
+            if missing_weather:
                 plan.valid = False
-                plan.error = (
-                    "solar_forecast_missing" if not solar_ok else "weather_forecast_missing"
-                )
+                plan.error = "weather_forecast_missing"
                 plan.hours = []
         for device_id, plan in plans.items():
             state = self.states[device_id]
+            plan.required_hours = required_hours.get(device_id, {})
+            plan.apparent_temperatures = apparent_temperatures.get(device_id, {})
             state.next_transition = self._next_transition_in_plan(plan, now)
             if not shadow_mode and (
                 state.locked_hour_start is None
@@ -473,10 +587,13 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             generated_at=now,
             hours=hours,
             plans=plans,
-            temperatures={day.isoformat(): value for day, value in temperatures.items()},
+            temperatures={
+                day.isoformat(): value
+                for day, value in next(iter(apparent_temperatures.values()), {}).items()
+            },
             warnings=warnings,
+            solar_source=solar_source,
         )
-        self.hass.bus.async_fire(EVENT_PLAN_UPDATED, self.as_dict(data))
         return data
 
     def _observed_active(self, subentry: ConfigSubentry) -> bool | None:
@@ -590,6 +707,11 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     continue
                 await self._async_set_target(subentry, bool(desired))
             await self.async_save_state()
+            if self.data is not None:
+                # Publish only after overrides, failure behavior, expiry, and the
+                # resulting output reason have all been applied. The Lovelace
+                # subscription must not remain stale until the next recalculation.
+                self.hass.bus.async_fire(EVENT_PLAN_UPDATED, self.as_dict())
 
     async def _async_set_target(self, subentry: ConfigSubentry, active: bool) -> None:
         """Set an explicit state using generic HA turn_on/turn_off services."""
@@ -647,6 +769,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             "shadow_mode": self.entry.data[CONF_SHADOW_MODE],
             "error": data.error,
             "warnings": data.warnings,
+            "solar_source": data.solar_source,
             "temperatures": data.temperatures,
             "diagnostics": {
                 "grid_power": self._numeric_state(self.entry.data.get("grid_power_sensor")),
@@ -672,6 +795,32 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     "feedback_entity": subentry.data.get(CONF_FEEDBACK_ENTITY),
                     "power_sensor": subentry.data.get(CONF_POWER_SENSOR),
                     "power_multiplier": subentry.data.get(CONF_POWER_MULTIPLIER, 1),
+                    "settings": {
+                        CONF_BASE_HOURS: float(subentry.data[CONF_BASE_HOURS]),
+                        CONF_MIN_HOURS: float(subentry.data[CONF_MIN_HOURS]),
+                        CONF_MAX_HOURS: float(subentry.data[CONF_MAX_HOURS]),
+                        CONF_ALWAYS_ON_BELOW: (
+                            float(subentry.data[CONF_ALWAYS_ON_BELOW])
+                            if CONF_ALWAYS_ON_BELOW in subentry.data
+                            else None
+                        ),
+                        CONF_ALWAYS_OFF_ABOVE: (
+                            float(subentry.data[CONF_ALWAYS_OFF_ABOVE])
+                            if CONF_ALWAYS_OFF_ABOVE in subentry.data
+                            else None
+                        ),
+                        CONF_REFERENCE_TEMPERATURE: float(
+                            subentry.data[CONF_REFERENCE_TEMPERATURE]
+                        ),
+                        CONF_HOURS_PER_DEGREE: float(subentry.data[CONF_HOURS_PER_DEGREE]),
+                        CONF_WEATHER_LOOKAHEAD_HOURS: float(
+                            subentry.data.get(CONF_WEATHER_LOOKAHEAD_HOURS, 12)
+                        ),
+                        CONF_PREHEAT_HOURS: float(subentry.data.get(CONF_PREHEAT_HOURS, 0)),
+                        CONF_LEGACY_WIND_CHILL: bool(
+                            subentry.data.get(CONF_LEGACY_WIND_CHILL, True)
+                        ),
+                    },
                     "state": {
                         "enabled": self.states[subentry.subentry_id].enabled,
                         "override": self.states[subentry.subentry_id].override,
