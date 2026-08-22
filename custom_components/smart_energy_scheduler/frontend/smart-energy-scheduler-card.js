@@ -41,6 +41,7 @@ class SmartEnergySchedulerCard extends HTMLElement {
   disconnectedCallback() {
     if (this._unsubscribe) this._unsubscribe();
     if (this._hourCenterTimer) clearTimeout(this._hourCenterTimer);
+    if (this._manualScrollTimer) clearTimeout(this._manualScrollTimer);
   }
 
   getCardSize() { return 6; }
@@ -158,17 +159,49 @@ class SmartEnergySchedulerCard extends HTMLElement {
     }, delay);
   }
 
-  _centerCurrentHour(hours) {
+  _bindTimelineInteraction(scroll) {
+    const markManualScroll = () => {
+      this._manualScrollUntil = Date.now() + 120000;
+      this._manualScrollLeft = scroll.scrollLeft;
+      if (this._manualScrollTimer) clearTimeout(this._manualScrollTimer);
+      this._manualScrollTimer = setTimeout(() => {
+        this._manualScrollUntil = 0;
+        this._manualScrollLeft = null;
+        this._render();
+      }, 120050);
+    };
+    scroll.addEventListener("pointerdown", markManualScroll, { passive: true });
+    scroll.addEventListener("touchstart", markManualScroll, { passive: true });
+    scroll.addEventListener("wheel", markManualScroll, { passive: true });
+    scroll.addEventListener("keydown", markManualScroll);
+    scroll.addEventListener("scroll", () => {
+      if (Date.now() < (this._manualScrollUntil || 0)) {
+        this._manualScrollLeft = scroll.scrollLeft;
+      }
+    }, { passive: true });
+  }
+
+  _restoreManualScroll(scroll, previousScrollLeft) {
+    this._bindTimelineInteraction(scroll);
+    if (Date.now() < (this._manualScrollUntil || 0) && Number.isFinite(previousScrollLeft)) {
+      scroll.scrollLeft = Number.isFinite(this._manualScrollLeft)
+        ? this._manualScrollLeft
+        : previousScrollLeft;
+      return true;
+    }
+    return false;
+  }
+
+  _centerCurrentHour(hours, previousScrollLeft = null) {
     const now = Date.now();
     const currentHourKey = Math.floor(now / 3600000);
-    if (this._centeredHourKey === currentHourKey) return;
     requestAnimationFrame(() => {
       const scroll = this.shadowRoot.querySelector(".scroll");
       const currentIndex = hours.findIndex((hour) => {
         const start = new Date(hour.start).getTime();
         return start <= now && now < start + 3600000;
       });
-      if (scroll && currentIndex >= 0) {
+      if (scroll && !this._restoreManualScroll(scroll, previousScrollLeft) && currentIndex >= 0) {
         const current = scroll.querySelectorAll(".hour")[currentIndex];
         if (current) {
           scroll.scrollLeft = Math.max(
@@ -183,6 +216,7 @@ class SmartEnergySchedulerCard extends HTMLElement {
 
   _render() {
     if (!this.data) return;
+    const previousScrollLeft = this.shadowRoot.querySelector(".scroll")?.scrollLeft ?? null;
     const count = Math.max(1, Math.min(48, Number(this.config.hours) || 48));
     const hours = (this.data.hours || []).slice(0, count);
     const prices = hours.map((h) => h.import_eur_mwh);
@@ -200,7 +234,7 @@ class SmartEnergySchedulerCard extends HTMLElement {
       const pvHeight = pv * .28;
       return `<div class="hour ${current ? "current" : ""}" title="${this._escape(title)}">
         <div class="price" style="height:${priceHeight}px;background:${this._color(h.import_eur_mwh, min, max)}"></div>
-        <div class="pv" style="height:${pvHeight}px"></div><span class="hour-label">${label}</span>
+        <div class="pv" style="height:${pvHeight}px;${pvHeight > .1 ? "" : "display:none"}"></div><span class="hour-label">${label}</span>
       </div>`;
     }).join("");
     const devices = Object.entries(this.data.devices || {}).map(([id, device]) => {
@@ -217,18 +251,18 @@ class SmartEnergySchedulerCard extends HTMLElement {
     }).join("");
     const warnings = (this.data.warnings || []).map((item) => `<li>${this._escape(item)}</li>`).join("");
     this.shadowRoot.innerHTML = `<style>
-      :host{display:block} ha-card{padding:var(--ha-space-4,16px);overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;gap:var(--ha-space-3,12px)}.card-title{color:var(--ha-card-header-color,var(--primary-text-color));font-family:var(--ha-card-header-font-family,inherit);font-size:var(--ha-card-header-font-size,var(--ha-font-size-2xl,24px));font-weight:var(--ha-font-weight-normal,400);letter-spacing:-.012em;line-height:var(--ha-line-height-expanded,1.5);margin:0}.badge{font-size:var(--ha-font-size-s,12px);padding:var(--ha-space-1,4px) var(--ha-space-2,8px);border-radius:var(--ha-border-radius-pill,999px);background:var(--warning-color,#f5a623);color:#111}.badge.live{background:var(--success-color,#43a047);color:#fff}.error{padding:var(--ha-space-4,16px);color:var(--error-color,#db4437)}.warnings{font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin:var(--ha-space-2,8px) 0}.chart,.blocks{display:grid;gap:2px;min-width:480px}.scroll{overflow-x:auto;padding-bottom:var(--ha-space-1,4px)}.hour{box-sizing:border-box;height:104px;padding-bottom:22px;display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;position:relative}.price{min-height:3px;border-radius:3px 3px 0 0}.pv{background:#fbc02d;min-height:0}.hour .hour-label{position:absolute;left:50%;bottom:2px;transform:translateX(-50%) rotate(-90deg);transform-origin:center;font-size:11px;font-weight:var(--ha-font-weight-medium,500);line-height:1;white-space:nowrap;color:#000}.hour.current::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid var(--error-color,#e53935)}.device{margin-top:var(--ha-space-4,16px)}.device-head{display:flex;justify-content:flex-start;align-items:center;gap:var(--ha-space-3,12px);margin-bottom:var(--ha-space-2,8px);position:sticky;left:0;z-index:2;width:max-content;max-width:100%;padding:var(--ha-space-1,4px) var(--ha-space-2,8px) var(--ha-space-1,4px) 0;background:var(--ha-card-background,var(--card-background-color,#fff))}.device small{display:block;color:var(--secondary-text-color);margin-top:2px}.buttons{display:flex;gap:var(--ha-space-1,4px);flex-wrap:wrap}.block{height:22px;border-radius:var(--ha-border-radius-sm,4px);background:var(--divider-color,#ddd)}.block.active{background:var(--primary-color,#03a9f4)}.legend{font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin-top:var(--ha-space-2,8px)}@media(max-width:600px){.device-head{align-items:flex-start;flex-direction:column}}
+      :host{display:block} ha-card{padding:var(--ha-space-4,16px);overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;gap:var(--ha-space-3,12px)}.card-title{color:var(--ha-card-header-color,var(--primary-text-color));font-family:var(--ha-card-header-font-family,inherit);font-size:var(--ha-card-header-font-size,var(--ha-font-size-2xl,24px));font-weight:var(--ha-font-weight-normal,400);letter-spacing:-.012em;line-height:var(--ha-line-height-expanded,1.5);margin:0}.badge{font-size:var(--ha-font-size-s,12px);padding:var(--ha-space-1,4px) var(--ha-space-2,8px);border-radius:var(--ha-border-radius-pill,999px);background:var(--warning-color,#f5a623);color:#111}.badge.live{background:var(--success-color,#43a047);color:#fff}.error{padding:var(--ha-space-4,16px);color:var(--error-color,#db4437)}.warnings{font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin:var(--ha-space-2,8px) 0}.chart,.blocks{display:grid;gap:2px;min-width:480px}.scroll{overflow-x:auto;padding-bottom:var(--ha-space-1,4px)}.hour{box-sizing:border-box;height:104px;padding-bottom:22px;position:relative}.price,.pv{position:absolute;left:0;right:0;bottom:22px;box-sizing:border-box}.price{min-height:3px;border-radius:3px 3px 0 0}.pv{z-index:1;background:rgba(251,192,45,.38);border-top:2px solid rgba(249,168,37,.85);pointer-events:none}.hour .hour-label{position:absolute;z-index:2;left:50%;bottom:2px;transform:translateX(-50%) rotate(-90deg);transform-origin:center;font-size:11px;font-weight:var(--ha-font-weight-medium,500);line-height:1;white-space:nowrap;color:#000}.hour.current::before{content:"";position:absolute;z-index:3;top:0;left:50%;transform:translateX(-50%);border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid var(--error-color,#e53935)}.device{margin-top:var(--ha-space-4,16px)}.device-head{display:flex;justify-content:flex-start;align-items:center;gap:var(--ha-space-3,12px);margin-bottom:var(--ha-space-2,8px);position:sticky;left:0;z-index:2;width:max-content;max-width:100%;padding:var(--ha-space-1,4px) var(--ha-space-2,8px) var(--ha-space-1,4px) 0;background:var(--ha-card-background,var(--card-background-color,#fff))}.device small{display:block;color:var(--secondary-text-color);margin-top:2px}.buttons{display:flex;gap:var(--ha-space-1,4px);flex-wrap:wrap}.block{height:22px;border-radius:var(--ha-border-radius-sm,4px);background:var(--divider-color,#ddd)}.block.active{background:var(--primary-color,#03a9f4)}.legend{font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin-top:var(--ha-space-2,8px)}@media(max-width:600px){.device-head{align-items:flex-start;flex-direction:column}}
     </style><ha-card>
       <div class="top"><h1 class="card-title">${this._escape(this.config.title)}</h1><span class="badge ${this.data.shadow_mode ? "" : "live"}">${this.data.shadow_mode ? "VARIREŽIIM" : "JUHTIMINE AKTIIVNE"}</span></div>
       ${this.data.error ? `<div class="error">${this._escape(this.data.error)}</div>` : ""}
       ${warnings ? `<ul class="warnings">${warnings}</ul>` : ""}
       <div class="scroll"><div class="chart" style="grid-template-columns:${columns}">${hourCells}</div>${devices}</div>
-      <div class="legend">Tulba värv: ostuhind · kollane: PV prognoos · sinine: seadme töötund</div>
+      <div class="legend">Tulba värv ja kõrgus: ostuhind · läbipaistev kollane kiht: PV prognoos · sinine: seadme töötund</div>
     </ha-card>`;
     this.shadowRoot.querySelectorAll("ha-button[data-mode]").forEach((button) => {
       button.addEventListener("click", () => this._override(button.dataset.device, button.dataset.mode));
     });
-    this._centerCurrentHour(hours);
+    this._centerCurrentHour(hours, previousScrollLeft);
     this._scheduleHourCenter();
   }
 }
@@ -324,6 +358,7 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
 
   _render() {
     if (!this.data) return;
+    const previousScrollLeft = this.shadowRoot.querySelector(".scroll")?.scrollLeft ?? null;
     const selected = this._selectedDevice();
     if (!selected) {
       this.shadowRoot.innerHTML = `<ha-card><div class="error">Ühtegi juhitavat seadet ei ole seadistatud.</div></ha-card>`;
@@ -433,20 +468,18 @@ class SmartEnergyPricePlanCard extends SmartEnergySchedulerCard {
       <div class="legend"><span class="key"><i class="swatch" style="background:#157347"></i>tegelikult ON</span><span class="key"><i class="swatch" style="background:#9e9e9e"></i>möödunud OFF</span><span class="key"><i class="swatch" style="background:#25a244"></i>planeeritud ON</span><span class="key"><i class="swatch" style="background:#f59e0b"></i>planeeritud OFF</span><span class="key"><i class="line"></i>efektiivhind koos PV-ga</span></div>
     </ha-card>`;
     const currentHourKey = Math.floor(now / 3600000);
-    if (this._centeredHourKey !== currentHourKey) {
-      requestAnimationFrame(() => {
-        const scroll = this.shadowRoot.querySelector(".scroll");
-        const currentIndex = hours.findIndex((hour) => {
-          const start = new Date(hour.start).getTime();
-          return start <= now && now < start + 3600000;
-        });
-        if (scroll && currentIndex >= 0) {
-          const currentX = left + currentIndex * step + step / 2;
-          scroll.scrollLeft = Math.max(0, currentX - scroll.clientWidth / 2);
-        }
-        this._centeredHourKey = currentHourKey;
+    requestAnimationFrame(() => {
+      const scroll = this.shadowRoot.querySelector(".scroll");
+      const currentIndex = hours.findIndex((hour) => {
+        const start = new Date(hour.start).getTime();
+        return start <= now && now < start + 3600000;
       });
-    }
+      if (scroll && !this._restoreManualScroll(scroll, previousScrollLeft) && currentIndex >= 0) {
+        const currentX = left + currentIndex * step + step / 2;
+        scroll.scrollLeft = Math.max(0, currentX - scroll.clientWidth / 2);
+      }
+      this._centeredHourKey = currentHourKey;
+    });
     this._scheduleHourCenter();
   }
 }

@@ -82,6 +82,10 @@ def test_timeline_cards_use_hour_only_labels_and_narrow_bars() -> None:
     assert "padding-bottom:22px" in source
     assert "bottom:2px" in source
     assert "color:#000" in source
+    assert ".price,.pv{position:absolute" in source
+    assert "background:rgba(251,192,45,.38)" in source
+    assert 'pvHeight > .1 ? "" : "display:none"' in source
+    assert "läbipaistev kollane kiht: PV prognoos" in source
     assert "text-shadow:" not in source
     assert "stroke:rgba(0,0,0" not in source
     assert "const barBottom = Math.max" in source
@@ -98,8 +102,18 @@ def test_scheduler_card_centers_current_hour_and_keeps_controls_visible() -> Non
         Path(__file__).parents[1]
         / "custom_components/smart_energy_scheduler/frontend/smart-energy-scheduler-card.js"
     ).read_text()
-    assert "_centerCurrentHour(hours)" in source
+    assert "_centerCurrentHour(hours, previousScrollLeft)" in source
     assert "current.offsetLeft + current.offsetWidth / 2 - scroll.clientWidth / 2" in source
+    assert "const previousScrollLeft" in source
+    assert "_restoreManualScroll(scroll, previousScrollLeft)" in source
+    assert "this._manualScrollUntil = Date.now() + 120000" in source
+    assert "this._manualScrollLeft = scroll.scrollLeft" in source
+    assert 'addEventListener("scroll", () =>' in source
+    assert "if (this._manualScrollTimer) clearTimeout" in source
+    assert "}, 120050);" in source
+    assert 'addEventListener("pointerdown", markManualScroll' in source
+    assert "if (this._centeredHourKey === currentHourKey) return" not in source
+    assert "if (this._centeredHourKey !== currentHourKey)" not in source
     assert ".device-head{display:flex;justify-content:flex-start" in source
     assert "position:sticky;left:0" in source
     assert "_planGradient(device, h)" in source
