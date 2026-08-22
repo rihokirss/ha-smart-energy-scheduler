@@ -1,13 +1,13 @@
 {
   "domain": "smart_energy_scheduler",
   "name": "Smart Energy Scheduler",
-  "codeowners": [],
+  "codeowners": ["@rihokirss"],
   "config_flow": true,
   "dependencies": ["energy", "http", "websocket_api"],
-  "documentation": "https://github.com/rix/ha-smart-energy-scheduler",
+  "documentation": "https://github.com/rihokirss/ha-smart-energy-scheduler",
   "integration_type": "service",
   "iot_class": "calculated",
-  "issue_tracker": "https://github.com/rix/ha-smart-energy-scheduler/issues",
+  "issue_tracker": "https://github.com/rihokirss/ha-smart-energy-scheduler/issues",
   "requirements": [],
   "version": "0.8.3"
 }

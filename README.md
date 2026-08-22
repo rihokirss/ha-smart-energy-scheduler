@@ -1,109 +1,360 @@
-# Smart Energy Scheduler
+# Smart Energy Scheduler for Home Assistant
 
-Home Assistant 2026.8+ custom integration for scheduling heat pumps and other switch-like loads against Nord Pool Day-Ahead prices, network tariffs, Forecast.Solar production, house base load, and apparent-temperature forecasts.
+[![Validate](https://github.com/rihokirss/ha-smart-energy-scheduler/actions/workflows/validate.yml/badge.svg)](https://github.com/rihokirss/ha-smart-energy-scheduler/actions/workflows/validate.yml)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
+[![Home Assistant 2026.8+](https://img.shields.io/badge/Home%20Assistant-2026.8%2B-18BCF2.svg)](https://www.home-assistant.io/)
 
-The first configured device is the current heat pump target `switch.sonoff_1001208b81_1`. It is non-inverted, uses a 9 h base target, 3–24 h limits, and forces active when price data is unavailable. The integration starts in **shadow mode** and therefore issues no commands until explicitly enabled in the integration settings.
+Smart Energy Scheduler is a custom Home Assistant integration that schedules heat pumps,
+water heaters, EV charging permits, and other switch-like loads when electricity is most
+favorable.
+
+It combines Nord Pool Day-Ahead prices, import and export fees, network tariffs,
+Forecast.Solar production, house base load, and optional weather compensation into a
+rolling 48-hour plan. Each configured load remains an ordinary Home Assistant entity and
+can be monitored or overridden from the generated entities or the bundled Lovelace cards.
+
+> [!CAUTION]
+> This integration can send real `turn_on` and `turn_off` commands. Keep **shadow mode**
+> enabled until the tariff model, device feedback, failure behavior, and generated plans
+> have been verified for your installation.
+
+## Features
+
+- Rolling 48-hour planning using Nord Pool Day-Ahead prices.
+- Independent schedules for multiple switch-like loads.
+- 15-minute or 60-minute device start intervals.
+- Daily base, minimum, and maximum runtime constraints.
+- Minimum consecutive ON and OFF durations.
+- Optional effective-price thresholds for always-ON and always-OFF behavior.
+- Weather-compensated runtime targets for heating loads.
+- Forecast.Solar support through the Home Assistant Energy Dashboard.
+- Shared PV allocation by device priority without double-counting production.
+- Seasonal sunrise/sunset fallback when a solar forecast is unavailable.
+- VAT, purchase/sale margins, day/night tariffs, weekends, and public holidays.
+- Shadow mode, explicit failure modes, output inversion, and timed manual overrides.
+- Generated sensors, controls, services, WebSocket updates, and three Lovelace cards.
+- English and Estonian configuration translations.
+
+## Requirements
+
+| Requirement | Purpose |
+| --- | --- |
+| Home Assistant 2026.8.0 or newer | Config subentries and the current data-entry-flow APIs |
+| A Nord Pool integration providing `nordpool.hourly` | Day-Ahead market prices |
+| A `switch`, `input_boolean`, or `light` target | The controlled load or its run permit |
+| An hourly `weather` entity (optional) | Weather-compensated runtime |
+| Forecast.Solar configured in the Energy Dashboard (optional) | PV production forecast |
+
+The integration currently expects the Nord Pool service response to contain quarter-hour
+price intervals. Tomorrow's prices are optional until the provider has published a complete
+local day.
 
 ## Installation
 
-1. Copy `custom_components/smart_energy_scheduler` into Home Assistant's `config/custom_components` directory (or install the repository as a HACS custom integration).
-2. Restart Home Assistant.
-3. Add **Smart Energy Scheduler** from Settings → Devices & services.
-4. Verify the tariff values and select `weather.openweathermap` (or another hourly forecast entity).
-5. Add this Lovelace resource as a JavaScript module:
+### HACS custom repository
 
-   `/smart_energy_scheduler/smart-energy-scheduler-card.js`
+Until the repository is included in the HACS default catalog:
 
-6. Add a manual dashboard card:
+1. Open **HACS → Integrations**.
+2. Open the three-dot menu and choose **Custom repositories**.
+3. Add `https://github.com/rihokirss/ha-smart-energy-scheduler` with category
+   **Integration**.
+4. Search for **Smart Energy Scheduler** and install it.
+5. Restart Home Assistant.
+
+### Manual installation
+
+1. Download or clone this repository.
+2. Copy `custom_components/smart_energy_scheduler` to
+   `<config>/custom_components/smart_energy_scheduler` on the Home Assistant host.
+3. Restart Home Assistant.
+
+The final directory should contain at least:
+
+```text
+<config>/custom_components/smart_energy_scheduler/
+├── __init__.py
+├── config_flow.py
+├── manifest.json
+├── services.yaml
+├── strings.json
+├── translations/
+└── frontend/
+```
+
+## Initial setup
+
+1. Open **Settings → Devices & services → Add integration**.
+2. Search for **Smart Energy Scheduler**.
+3. Review the imported tariff defaults and confirm that they match your contract.
+4. Select an hourly weather entity if weather compensation will be used.
+5. Leave **shadow mode** enabled.
+6. Finish the setup, open the generated device row, and choose **Configure device**.
+7. Select the correct target and review every device section before enabling control.
+
+Only one scheduler config entry is supported. Additional controlled loads are created as
+config subentries from **Add controlled device** on the integration page.
+
+### Shared settings
+
+The integration-level **Configure** action contains settings shared by every load:
+
+- Nord Pool area and currency;
+- purchase and sale margins;
+- VAT and whether network fees already include VAT;
+- day and night network fees and tariff times;
+- weekend and public-holiday night tariff behavior;
+- weather entity and house base load;
+- solar fallback season and sunrise/sunset offsets;
+- optional grid/PV power sensors used for diagnostics;
+- shadow mode and tariff confirmation.
+
+### Device settings
+
+Each controlled load has six compact configuration sections:
+
+| Section | Settings |
+| --- | --- |
+| Device | Name, target entity, inverted output, automatic control |
+| Schedule and daily hours | Work window, base/min/max hours, planning step, minimum ON/OFF durations |
+| Power and measurement | Feedback entity, power sensor, multiplier, nominal power |
+| Price limits | Optional always-ON and always-OFF effective prices |
+| Weather-based control | Weather adjustment, reference temperature, curve slope, forecast window and lead |
+| Advanced behavior | Solar priority and missing-data failure mode |
+
+When the start and end of the work window are equal, the device is allowed to run all day.
+A 15-minute planning step permits starts at `:00`, `:15`, `:30`, and `:45`; a 60-minute
+step permits starts only at `:00`. Minimum ON/OFF durations are not shortened by the finer
+planning step.
+
+## Data sources and calculation model
+
+### Electricity prices
+
+The effective import price for each market interval is calculated as:
+
+```text
+(market price + purchase margin) × (1 + VAT) + applicable network fee
+```
+
+If **network fees include VAT** is enabled, VAT is not added to the network component.
+The export value is:
+
+```text
+market price + sale margin
+```
+
+Every quarter-hour is tariffed using its own local timestamp. The implementation preserves
+23-, 24-, and 25-hour local days, including the repeated hour at the end of daylight-saving
+time. A missing or incomplete next day does not invalidate the current day's plan; the
+integration retries on its next update.
+
+### Solar forecast
+
+Smart Energy Scheduler reads the same solar forecast providers selected under
+**Settings → Dashboards → Energy → Solar production**. Installing Forecast.Solar alone is
+not sufficient: its config entry must be selected as a forecast provider for the Energy
+Dashboard solar source.
+
+When several forecast providers are selected, their hourly `wh_hours` series are summed.
+Forecast PV first covers the configured house base load. Remaining PV is allocated once to
+controlled devices in solar-priority order, so the same production is never assigned to two
+loads. Self-consumed PV is valued at the export revenue that would otherwise have been
+earned.
+
+If all providers are missing or fail, the optional fallback can model solar availability
+between configurable sunrise/sunset offsets and months. Outside that fallback window,
+forecast production is zero and price-only planning continues with a warning. The optional
+PV power sensor is diagnostic only; it is not used as a forecast source.
+
+### Weather compensation
+
+For weather-controlled devices, the daily target is:
+
+```text
+base hours + (reference temperature − forecast apparent temperature) × hours per degree
+```
+
+The result is rounded and clamped to the configured minimum and maximum. The forecast value
+is averaged across a configurable look-ahead window, which can be shifted into the future
+with the preheat/thermal-inertia setting.
+
+The legacy mode calculates wind chill from forecast temperature and wind speed. When legacy
+mode is disabled, the provider's `apparent_temperature` is preferred; plain temperature is
+used only when apparent temperature is unavailable.
+
+### Price limits
+
+- **Always ON at or below** may expand the daily target when the complete minimum run is
+  sufficiently cheap.
+- **Always OFF at or above** rejects expensive candidate runs, but the configured daily
+  minimum remains a safety requirement and can override that cap.
+- The always-ON value must be lower than the always-OFF value when both are enabled.
+
+## Safety and output behavior
+
+- **Shadow mode** calculates and publishes plans without sending target commands.
+- The integration uses explicit `homeassistant.turn_on` and `homeassistant.turn_off` calls;
+  it never uses `toggle`.
+- **Inverted output** means a scheduled active interval sends `turn_off` to the target.
+- The automatic-control switch can disable commands for an individual load.
+- Missing source data can be configured to force ON, force OFF, or keep the current state.
+- Unloading the integration does not change the physical target state.
+- Actual runtime is observed from the power sensor first, then the feedback entity, and
+  finally the target entity.
+
+Before leaving shadow mode:
+
+1. Observe at least two complete days, including tomorrow-price publication.
+2. Compare planned activity with the device's actual feedback or power history.
+3. Verify tariff units: all price and fee fields are in `EUR/MWh`.
+4. Test inverted output and manual overrides with a non-critical target.
+5. Confirm the selected failure mode is safe during a Home Assistant or data-provider
+   outage.
+
+## Entities
+
+Every controlled device creates the following Home Assistant entities:
+
+| Platform | Entity purpose |
+| --- | --- |
+| `binary_sensor` | Whether the current interval is scheduled active |
+| `switch` | Enable or disable automatic control for the device |
+| `select` | Automatic, forced ON, or forced OFF override |
+| `datetime` | Optional override expiration time |
+| `number` | Base/min/max hours and weather-curve controls |
+| `sensor` | Planned, actual, and remaining hours; next transition; control reason |
+
+The integration stores runtime counters and overrides in Home Assistant storage and restores
+them after restart.
+
+## Lovelace cards
+
+The integration serves its bundled JavaScript at:
+
+```text
+/smart_energy_scheduler/smart-energy-scheduler-card.js
+```
+
+Add that URL under **Settings → Dashboards → Resources** as a **JavaScript module**. Then
+add one or more manual cards.
+
+### Complete multi-device plan
 
 ```yaml
 type: custom:smart-energy-scheduler-card
-title: Energia juhtimine
+title: Energy scheduling
 hours: 48
 ```
 
-For a price graph matching a conventional daily tariff chart, starting at local
-midnight, with actual past activity and future planned activity:
+This card displays market prices, PV production, every device plan, shadow/live status, and
+two-hour ON/OFF overrides.
+
+### Price and activity chart
 
 ```yaml
 type: custom:smart-energy-price-plan-card
-title: Hind ja tööplaan
-target_entity: switch.sonoff_1001208b81_1
+title: Price and heat-pump plan
+target_entity: switch.heat_pump
 hours: 48
 ```
 
-Editable weather response and heating curve:
+The chart combines historical activity, future 15/60-minute plan segments, import price,
+effective device price, and forecast PV.
+
+### Editable heating curve
 
 ```yaml
 type: custom:smart-energy-heating-curve-card
-title: Soojuspumba küttekõver
-target_entity: switch.sonoff_1001208b81_1
+title: Heat-pump heating curve
+target_entity: switch.heat_pump
+min_temperature: -25
+max_temperature: 25
 ```
 
-The same per-device card also edits two optional effective-price limits. “Always ON” can
-expand that device's daily target when the tariff-, VAT-, and PV-adjusted price is cheap.
-“Always OFF” caps the weather-derived target when the effective price is expensive, while
-the configured daily minimum remains a safety requirement and may override that cap.
-In quarter-hour mode the maximum limit rejects a candidate run containing an excessive
-quarter, while the always-ON limit evaluates the average of the complete minimum run.
+Per-device cards can select a load with `device_id`, `device` (configured name), or
+`target_entity`. If no selector is supplied, the first configured device is used.
 
-Past activity is dark green at its actual history boundaries and future planned
-activity is green/orange at the configured 15- or 60-minute boundaries. The chart
-keeps readable whole-hour labels (`00`–`23`), while the blue effective-price line
-and colored bar segments can use quarter-hour detail.
+## Services
 
-Keep shadow mode enabled for at least 48 hours. Compare the plan with actual conditions before enabling output control.
+| Service | Description |
+| --- | --- |
+| `smart_energy_scheduler.recalculate` | Fetch inputs, rebuild the plan, and apply the current interval |
+| `smart_energy_scheduler.set_override` | Set a device to automatic, forced ON, or forced OFF mode |
+| `smart_energy_scheduler.update_device_settings` | Update heating-curve, planning-step, and price-limit settings |
 
-## Configuration layout
+Example manual override:
 
-- **Settings → Devices & services → Smart Energy Scheduler → Configure** contains the shared price, tax, network tariff, PV/base-load, weather-source, and shadow-mode settings.
-- **Settings → Devices & services → Smart Energy Scheduler → device row → Configure device** contains that device's target entity, inverted-output setting, feedback/power sensors, work window, 15/60-minute planning step, daily hours, minimum ON/OFF times, weather adjustment, and failure behavior.
-- Use **Add controlled device** in the integration menu to create another independently scheduled target. Shared price and tariff settings are not duplicated per device.
+```yaml
+action: smart_energy_scheduler.set_override
+data:
+  device_id: 01EXAMPLEDEVICEID
+  mode: "on"
+  until: "2026-01-15 14:00:00"
+```
 
-A 15-minute planning step allows starts at `:00/:15/:30/:45` without shortening
-minimum ON/OFF durations. For example, a heat pump may start at `02:15` and still
-run for at least 60 consecutive minutes. The 60-minute mode only starts on `:00`.
+The internal scheduler device ID is visible in service calls generated by the bundled card
+and in the `smart_energy_scheduler/get_plan` WebSocket response. Most users should use the
+generated override select instead of calling the service directly.
 
-## Pricing model
+## Troubleshooting
 
-- Import with VAT-inclusive network fees: `(market + purchase margin) × (1 + VAT) + slot-specific network fee`
-- Export: `market + sale margin`
-- Forecast PV first covers configured house base load. Remaining energy is allocated once, by device solar priority.
-- Self-consumed PV is valued at the export revenue that would otherwise have been earned.
-- If Forecast.Solar is unavailable, the default fallback reproduces the previous YAML model: March–September, from three hours after sunrise until two hours before sunset. During that window the base load and configured controlled loads are treated as solar-covered. All fallback parameters are shared settings.
-- Outside the fallback window a missing PV forecast is treated as zero production; price-based planning remains valid and a warning is exposed.
+### The plan is unavailable
 
-Every 15-minute price is tariffed using its own timestamp. Devices can optimize those
-slots directly or restrict transitions to absolute one-hour cycles. This preserves both
-repeated hours on the 25-hour DST day.
+- Confirm that `nordpool.hourly` exists under **Developer tools → Actions**.
+- Call `smart_energy_scheduler.recalculate` and inspect the integration log.
+- A partial next day is normal; unavailable current-day prices are not.
+- Check the device's **Control reason** sensor and the warnings shown on the cards.
 
-The default Estonian Elektrilevi **Võrk 2** values are 75.30 EUR/MWh by day
-and 43.50 EUR/MWh by night, already including VAT. The default VAT rate is
-24%. Day pricing applies Monday–Friday 07:00–22:00; nights, weekends, and
-Estonian public holidays use the night rate. A toggle allows VAT-exclusive
-network prices for other tariffs without changing the calculation model.
+### Forecast.Solar is installed but PV stays at zero
 
-Tomorrow's prices are optional until Nord Pool has published a complete local
-23/24/25-hour day. A missing, delayed, or partial next-day response does not
-invalidate today's schedule; the integration retries on every 15-minute update.
+- Open the Energy Dashboard configuration.
+- Edit the solar production source.
+- Select each Forecast.Solar entry under solar forecast providers.
+- Recalculate the scheduler plan.
 
-## Weather model
+### Weather compensation has no effect
 
-Daily target: `base + (reference apparent temperature − rolling forecast apparent temperature) × hours per degree`, clamped to minimum/maximum and rounded to whole hours. The default rolling window is the next 12 hours, matching the intent of the previous YAML model that sampled forecast hours 0/3/7/11. A configurable forecast lead shifts that window further forward for a high-inertia building. The heat-pump default reproduces the previous YAML wind-chill formula from forecast temperature and wind speed; this can be switched to the weather provider's own `apparent_temperature` from the heating-curve card. Plain temperature is used only as a visible fallback.
+- Select a weather entity in the integration-level configuration.
+- Confirm that the entity provides an hourly forecast.
+- Enable weather adjustment in the device's **Weather-based control** section.
+- Review fallback warnings on the Lovelace card.
 
-## Cutover checklist
+### A Lovelace card does not update
 
-- Observe shadow mode for 48 hours.
-- Verify Sonoff restore/power-on behavior for a complete HA outage.
-- Disable `Soojuspump`, `Soojuspumba automaatjuhtimine`, and `Soojuspumba kesköine kontroll` only when leaving shadow mode.
-- Stop the Shelly `Heating 24h-Forecast` script and watchdog at the same cutover.
-- Retain the old YAML for seven stable days and until the radiator-pump dependency on `binary_sensor.pumba_taimer` is migrated.
-- Remove the temporary `gpt` admin account or its admin right and rotate the shared password.
+- Verify that the resource URL is registered as a JavaScript module.
+- Hard-refresh the browser after updating the integration.
+- Confirm that the integration is loaded and the resource URL returns JavaScript.
+
+## Updating
+
+For HACS installations, update from HACS and restart Home Assistant. For manual
+installations, replace the complete integration directory and restart Home Assistant. Do
+not copy only selected Python files because translations, icons, and the bundled frontend
+may change together.
 
 ## Development
 
+Create a virtual environment and install the test dependencies:
+
 ```bash
-python -m pip install -e '.[test]'
-pytest
-ruff check .
+python -m venv .venv
+.venv/bin/pip install -e '.[test]'
 ```
+
+Run the local checks:
+
+```bash
+.venv/bin/ruff check .
+.venv/bin/pytest
+```
+
+GitHub Actions additionally runs Home Assistant `hassfest` and HACS validation. Pull
+requests should keep the stored config-entry format backward compatible or provide an
+explicit migration.
+
+## Project status
+
+This project is under active development. Treat it as pre-release automation software and
+validate every plan in shadow mode before allowing it to control equipment. Bug reports and
+focused pull requests are welcome through the GitHub issue tracker.
