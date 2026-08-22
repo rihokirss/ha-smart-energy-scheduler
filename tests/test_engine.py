@@ -63,6 +63,10 @@ def test_parse_nordpool_multi_area_response() -> None:
     assert result[0].market_eur_mwh == 42.5
 
 
+def test_parse_nordpool_missing_day_response_is_empty() -> None:
+    assert parse_nordpool_response(None, "EE") == []
+
+
 def test_four_quarters_are_duration_weighted() -> None:
     start = datetime(2026, 8, 20, 4, tzinfo=UTC)  # 07:00 Tallinn
     quarters = [

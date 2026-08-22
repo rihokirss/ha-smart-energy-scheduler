@@ -117,22 +117,41 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
         stored = await self._store.async_load() or {}
         for subentry in self.device_subentries:
             raw = stored.get("devices", {}).get(subentry.subentry_id, {})
+            observation_source = self._observation_source(subentry)
+            source_changed = raw.get("observation_source") != observation_source
             override_until = raw.get("override_until")
             last_accounted = raw.get("last_accounted_at")
+            actual_hours = {
+                key: float(value) for key, value in raw.get("actual_hours_by_day", {}).items()
+            }
+            # Runtime accumulated with another feedback source is not comparable.
+            # In particular, changing from a master permit switch to compressor
+            # feedback must not make the new device look as if it already ran.
+            if source_changed:
+                actual_hours.pop(dt_util.now().astimezone(self.timezone).date().isoformat(), None)
             self.states[subentry.subentry_id] = DeviceRuntimeState(
                 enabled=bool(raw.get("enabled", subentry.data.get(CONF_ENABLED, True))),
                 override=raw.get("override", OVERRIDE_AUTO),
                 override_until=parse_datetime(override_until) if override_until else None,
-                actual_hours_by_day={
-                    key: float(value) for key, value in raw.get("actual_hours_by_day", {}).items()
-                },
-                last_active=raw.get("last_active"),
-                last_accounted_at=parse_datetime(last_accounted) if last_accounted else None,
+                actual_hours_by_day=actual_hours,
+                observation_source=observation_source,
+                last_active=None if source_changed else raw.get("last_active"),
+                last_accounted_at=(
+                    None
+                    if source_changed
+                    else parse_datetime(last_accounted)
+                    if last_accounted
+                    else None
+                ),
                 reason=raw.get("reason", "restored"),
-                locked_hour_start=parse_datetime(raw["locked_hour_start"])
-                if raw.get("locked_hour_start")
-                else None,
-                locked_active=raw.get("locked_active"),
+                locked_hour_start=(
+                    None
+                    if source_changed
+                    else parse_datetime(raw["locked_hour_start"])
+                    if raw.get("locked_hour_start")
+                    else None
+                ),
+                locked_active=None if source_changed else raw.get("locked_active"),
             )
 
     async def async_save_state(self) -> None:
@@ -147,6 +166,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                         if state.override_until
                         else None,
                         "actual_hours_by_day": state.actual_hours_by_day,
+                        "observation_source": state.observation_source,
                         "last_active": state.last_active,
                         "last_accounted_at": state.last_accounted_at.isoformat()
                         if state.last_accounted_at
@@ -161,6 +181,16 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                 }
             }
         )
+
+    @staticmethod
+    def _observation_source(subentry: ConfigSubentry) -> str:
+        """Return a stable key for the source used to count actual runtime."""
+        data = subentry.data
+        if power_sensor := data.get(CONF_POWER_SENSOR):
+            return f"power:{power_sensor}:{float(data.get(CONF_POWER_MULTIPLIER, 1))}"
+        if feedback := data.get(CONF_FEEDBACK_ENTITY):
+            return f"feedback:{feedback}"
+        return f"target:{data[CONF_TARGET_ENTITY]}:{bool(data[CONF_INVERTED])}"
 
     def _tariff(self) -> TariffConfig:
         data = self.entry.data
@@ -244,17 +274,44 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
     async def _async_update_data(self) -> SchedulerData:
         """Fetch inputs and calculate a complete, non-commanding plan."""
         now = dt_util.now().astimezone(self.timezone)
+        shadow_mode = bool(self.entry.data[CONF_SHADOW_MODE])
         warnings: list[str] = []
         await self.async_account_actual(now)
+        # Shadow mode never changes the physical output, so there is no begun
+        # scheduler cycle to protect. A transient startup failure must not pin
+        # the current hour to the configured failure state on the preview chart.
+        if shadow_mode:
+            for state in self.states.values():
+                state.locked_hour_start = None
+                state.locked_active = None
         try:
-            yesterday_payload, today_payload, tomorrow_payload = await asyncio.gather(
-                self._async_fetch_prices(now.date() - timedelta(days=1)),
-                self._async_fetch_prices(now.date()),
-                self._async_fetch_prices(now.date() + timedelta(days=1)),
+            price_days = [
+                now.date() - timedelta(days=1),
+                now.date(),
+                now.date() + timedelta(days=1),
+            ]
+            price_payloads = await asyncio.gather(
+                *(self._async_fetch_prices(day) for day in price_days),
+                return_exceptions=True,
             )
-            quarters = parse_nordpool_response(yesterday_payload, self.entry.data[CONF_AREA])
-            quarters += parse_nordpool_response(today_payload, self.entry.data[CONF_AREA])
-            quarters += parse_nordpool_response(tomorrow_payload, self.entry.data[CONF_AREA])
+            quarters = []
+            for day, payload in zip(price_days, price_payloads, strict=True):
+                if isinstance(payload, asyncio.CancelledError):
+                    raise payload
+                if isinstance(payload, Exception):
+                    if day > now.date() and "next_day_prices_pending" not in warnings:
+                        warnings.append("next_day_prices_pending")
+                    elif day == now.date():
+                        warnings.append("current_day_prices_unavailable")
+                    continue
+                parsed = parse_nordpool_response(payload, self.entry.data[CONF_AREA])
+                if not parsed:
+                    if day > now.date() and "next_day_prices_pending" not in warnings:
+                        warnings.append("next_day_prices_pending")
+                    elif day == now.date():
+                        warnings.append("current_day_prices_unavailable")
+                    continue
+                quarters.extend(parsed)
             unique_quarters = {(quarter.start, quarter.end): quarter for quarter in quarters}
             hours = aggregate_hourly(unique_quarters.values(), self._tariff(), self.timezone)
             # Expose both local calendar days so the chart starts at today's
@@ -265,6 +322,19 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             hours = [hour for hour in hours if hour.start.date() in planning_days]
             if not hours:
                 raise RuntimeError("Nord Pool returned no usable price slots")
+            tomorrow = now.date() + timedelta(days=1)
+            tomorrow_start = datetime.combine(tomorrow, datetime.min.time(), tzinfo=self.timezone)
+            tomorrow_end = datetime.combine(
+                tomorrow + timedelta(days=1), datetime.min.time(), tzinfo=self.timezone
+            )
+            expected_tomorrow_hours = round(
+                (tomorrow_end.timestamp() - tomorrow_start.timestamp()) / 3600
+            )
+            received_tomorrow_hours = sum(hour.start.date() == tomorrow for hour in hours)
+            if received_tomorrow_hours != expected_tomorrow_hours:
+                hours = [hour for hour in hours if hour.start.date() != tomorrow]
+                if "next_day_prices_pending" not in warnings:
+                    warnings.append("next_day_prices_pending")
             planning_hours = [
                 hour
                 for hour in hours
@@ -351,6 +421,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                 current_hour = now.replace(minute=0, second=0, microsecond=0)
                 if (
                     day == now.date()
+                    and not shadow_mode
                     and state.locked_active
                     and state.locked_hour_start is not None
                     and state.locked_hour_start.timestamp() == current_hour.timestamp()
@@ -361,16 +432,17 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
 
         current_hour = now.replace(minute=0, second=0, microsecond=0)
         forced_states: dict[str, dict[float, bool]] = {}
-        for subentry in self.device_subentries:
-            state = self.states[subentry.subentry_id]
-            if (
-                state.locked_hour_start is not None
-                and state.locked_active is not None
-                and state.locked_hour_start.timestamp() == current_hour.timestamp()
-            ):
-                forced_states[subentry.subentry_id] = {
-                    current_hour.timestamp(): state.locked_active
-                }
+        if not shadow_mode:
+            for subentry in self.device_subentries:
+                state = self.states[subentry.subentry_id]
+                if (
+                    state.locked_hour_start is not None
+                    and state.locked_active is not None
+                    and state.locked_hour_start.timestamp() == current_hour.timestamp()
+                ):
+                    forced_states[subentry.subentry_id] = {
+                        current_hour.timestamp(): state.locked_active
+                    }
         plans = build_plans(planning_hours, planning_devices, targets, forced_states)
         for subentry in self.device_subentries:
             plan = plans.get(subentry.subentry_id)
@@ -387,8 +459,10 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                 plan.hours = []
         for device_id, plan in plans.items():
             state = self.states[device_id]
-            if state.locked_hour_start is None or (
-                state.locked_hour_start.timestamp() != current_hour.timestamp()
+            state.next_transition = self._next_transition_in_plan(plan, now)
+            if not shadow_mode and (
+                state.locked_hour_start is None
+                or state.locked_hour_start.timestamp() != current_hour.timestamp()
             ):
                 for hour in plan.hours:
                     if hour.start.timestamp() == current_hour.timestamp():
@@ -506,9 +580,10 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                         else:
                             state.reason = "failure_keep"
                             continue
-                        current_hour = now.replace(minute=0, second=0, microsecond=0)
-                        state.locked_hour_start = current_hour
-                        state.locked_active = desired
+                        if not self.entry.data[CONF_SHADOW_MODE]:
+                            current_hour = now.replace(minute=0, second=0, microsecond=0)
+                            state.locked_hour_start = current_hour
+                            state.locked_active = desired
                 state.reason = "shadow_" + reason if self.entry.data[CONF_SHADOW_MODE] else reason
                 state.next_transition = self._next_transition(subentry.subentry_id, now)
                 if self.entry.data[CONF_SHADOW_MODE]:
@@ -537,7 +612,14 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
     def _next_transition(self, device_id: str, now: datetime) -> datetime | None:
         if not self.data or (plan := self.data.plans.get(device_id)) is None:
             return None
-        current = self.planned_active(device_id, now)
+        return self._next_transition_in_plan(plan, now)
+
+    @staticmethod
+    def _next_transition_in_plan(plan: DevicePlan, now: datetime) -> datetime | None:
+        """Return the next planned ON/OFF boundary in one device plan."""
+        current = plan.active_at(now)
+        if current is None:
+            return None
         for hour in plan.hours:
             if hour.start.timestamp() > now.timestamp() and hour.active != current:
                 return hour.start

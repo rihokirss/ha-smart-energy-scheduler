@@ -55,6 +55,10 @@ Keep shadow mode enabled for at least 48 hours. Compare the plan with actual con
 
 Every 15-minute price is tariffed using its own timestamp and then duration-weighted into absolute one-hour cycles. This preserves both repeated hours on the 25-hour DST day.
 
+Tomorrow's prices are optional until Nord Pool has published a complete local
+23/24/25-hour day. A missing, delayed, or partial next-day response does not
+invalidate today's schedule; the integration retries on every 15-minute update.
+
 ## Weather model
 
 Daily target: `base + (reference apparent temperature − daily average apparent temperature) × hours per degree`, clamped to minimum/maximum and rounded to whole hours. `apparent_temperature` is the real-feel value supplied by the selected weather provider and includes that provider's wind/chill model. Plain temperature is used only as a visible diagnostic fallback.

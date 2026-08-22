@@ -210,6 +210,103 @@ if (process.env.HA_INSPECT === "1") {
   }
   const registry = await wsRequest({ type: "config/entity_registry/list" });
   const allStates = await wsRequest({ type: "get_states" });
+  const temperatureCandidates = allStates
+    .filter((state) => /gaas|vesi/i.test(`${state.entity_id} ${state.attributes.friendly_name || ""}`))
+    .map((state) => ({
+      entity_id: state.entity_id,
+      name: state.attributes.friendly_name,
+      state: state.state,
+      unit: state.attributes.unit_of_measurement,
+    }));
+  const controlCandidates = allStates
+    .filter((state) => /shelly|sonoff|soojus|pump|heating|sv_/i.test(
+      `${state.entity_id} ${state.attributes.friendly_name || ""}`,
+    ))
+    .filter((state) => ["switch", "input_boolean", "binary_sensor", "climate", "select"].includes(
+      state.entity_id.split(".")[0],
+    ))
+    .map((state) => ({
+      entity_id: state.entity_id,
+      name: state.attributes.friendly_name,
+      state: state.state,
+    }));
+  let temperatureHistory = {};
+  const temperatureHistoryHours = Number(process.env.TEMP_HISTORY_HOURS || 24);
+  if (temperatureCandidates.length) {
+    temperatureHistory = await wsRequest({
+      type: "history/history_during_period",
+      start_time: new Date(Date.now() - temperatureHistoryHours * 3600000).toISOString(),
+      end_time: new Date().toISOString(),
+      entity_ids: temperatureCandidates.map((state) => state.entity_id),
+      minimal_response: true,
+      no_attributes: true,
+    }).catch(() => ({}));
+  }
+  const temperatureHistorySummary = Object.fromEntries(
+    temperatureCandidates.map((candidate) => {
+      const values = (temperatureHistory[candidate.entity_id] || [])
+        .map((item) => Number(item.s ?? item.state))
+        .filter(Number.isFinite);
+      return [candidate.entity_id, {
+        samples: values.length,
+        minimum: values.length ? Math.min(...values) : null,
+        maximum: values.length ? Math.max(...values) : null,
+        recent: values.slice(-12),
+      }];
+    }),
+  );
+  function numericSeries(entityId) {
+    return (temperatureHistory[entityId] || [])
+      .map((item) => ({
+        time: Number(item.lu ?? item.lc) * 1000 || Date.parse(item.last_changed || ""),
+        value: Number(item.s ?? item.state),
+      }))
+      .filter((item) => Number.isFinite(item.time) && Number.isFinite(item.value))
+      .sort((left, right) => left.time - right.time);
+  }
+  function sampledDeltas(firstId, secondId) {
+    const first = numericSeries(firstId);
+    const second = numericSeries(secondId);
+    if (!first.length || !second.length) return [];
+    const result = [];
+    let firstIndex = 0;
+    let secondIndex = 0;
+    const start = Date.now() - temperatureHistoryHours * 3600000;
+    for (let stamp = start; stamp <= Date.now(); stamp += 5 * 60000) {
+      while (firstIndex + 1 < first.length && first[firstIndex + 1].time <= stamp) firstIndex++;
+      while (secondIndex + 1 < second.length && second[secondIndex + 1].time <= stamp) secondIndex++;
+      if (first[firstIndex].time <= stamp && second[secondIndex].time <= stamp) {
+        result.push(Number((first[firstIndex].value - second[secondIndex].value).toFixed(2)));
+      }
+    }
+    return result;
+  }
+  function summarizeDeltas(values) {
+    if (!values.length) return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    const quantile = (ratio) => sorted[Math.min(sorted.length - 1, Math.floor(ratio * sorted.length))];
+    return {
+      samples: values.length,
+      min: sorted[0],
+      p10: quantile(.1),
+      median: quantile(.5),
+      p90: quantile(.9),
+      max: sorted.at(-1),
+      minutes_above: Object.fromEntries([3, 5, 8, 10, 15].map((level) => [level, values.filter((value) => value > level).length * 5])),
+      recent: values.slice(-18),
+    };
+  }
+  const temperatureDeltaAnalysis = {
+    gas_supply_minus_gas_return: summarizeDeltas(sampledDeltas(
+      "sensor.sv_gaas_peale_temperature", "sensor.sv_gaas_maha_temperature",
+    )),
+    gas_supply_minus_water_supply: summarizeDeltas(sampledDeltas(
+      "sensor.sv_gaas_peale_temperature", "sensor.sv_vesi_peale_temperature",
+    )),
+    water_supply_minus_water_return: summarizeDeltas(sampledDeltas(
+      "sensor.sv_vesi_peale_temperature", "sensor.sv_vesi_maha_temperature",
+    )),
+  };
   const targetResponse = await fetch(`${baseUrl}/api/states/switch.sonoff_1001208b81_1`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -300,14 +397,54 @@ if (process.env.HA_INSPECT === "1") {
   } catch (error) {
     directWeather = { error: error.message };
   }
+  const nordpoolDayChecks = [];
+  function collectDeliveryStarts(value, result = []) {
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectDeliveryStarts(item, result));
+    } else if (value && typeof value === "object") {
+      if (value.deliveryStart || value.start || value.timestamp) {
+        result.push(value.deliveryStart || value.start || value.timestamp);
+      } else {
+        Object.values(value).forEach((item) => collectDeliveryStarts(item, result));
+      }
+    }
+    return result;
+  }
+  for (const offset of [-1, 0, 1]) {
+    const day = new Date();
+    day.setDate(day.getDate() + offset);
+    const date = day.toLocaleDateString("en-CA", { timeZone: "Europe/Tallinn" });
+    try {
+      const response = await wsRequest({
+        type: "call_service",
+        domain: "nordpool",
+        service: "hourly",
+        service_data: { date, area: ["EE"], currency: "EUR" },
+        return_response: true,
+      });
+      const starts = collectDeliveryStarts(response);
+      nordpoolDayChecks.push({
+        date,
+        ok: true,
+        has_response: response?.response != null,
+        slots: starts.length,
+        first: starts[0],
+        last: starts.at(-1),
+      });
+    } catch (error) {
+      nordpoolDayChecks.push({ date, ok: false, error: error.message });
+    }
+  }
   inspection = {
     ha_version: haConfig.version,
     config_entry_api: schedulerEntries,
     shadow_mode: plan?.shadow_mode,
     plan_hours: plan?.hours?.length || 0,
     temperature_days: Object.keys(plan?.temperatures || {}),
+    temperatures: plan?.temperatures || {},
     warnings: plan?.warnings || [],
     configured_weather: storedScheduler?.data?.weather_entity,
+    scheduler_config: storedScheduler?.data || {},
     configured_subentries: storedSubentries,
     reconfigure_flow: reconfigureFlow,
     device_reconfigure_flow: deviceFlow,
@@ -330,6 +467,17 @@ if (process.env.HA_INSPECT === "1") {
       .filter((state) => state.entity_id.startsWith("weather."))
       .map((state) => ({ id: state.entity_id, supported_features: state.attributes.supported_features })),
     direct_weather_call: directWeather,
+    temperature_candidates: temperatureCandidates,
+    pv_power_candidate: allStates.find(
+      (state) => state.entity_id === "sensor.a9inverter1_ac_power",
+    ) || null,
+    scheduler_transition_states: allStates.filter(
+      (state) => state.entity_id.includes("next_transition"),
+    ),
+    control_candidates: controlCandidates,
+    temperature_history: temperatureHistorySummary,
+    temperature_deltas: temperatureDeltaAnalysis,
+    nordpool_day_checks: nordpoolDayChecks,
     first_device_slots: Object.values(plan?.devices || {})[0]?.plan?.hours?.slice(0, 3) || [],
     first_device: Object.values(plan?.devices || {})[0] || null,
     price_hours: plan?.hours || [],

@@ -122,6 +122,7 @@ class DeviceRuntimeState:
     override: str = "auto"
     override_until: datetime | None = None
     actual_hours_by_day: dict[str, float] = field(default_factory=dict)
+    observation_source: str | None = None
     last_active: bool | None = None
     last_accounted_at: datetime | None = None
     next_transition: datetime | None = None
