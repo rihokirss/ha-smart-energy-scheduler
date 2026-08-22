@@ -1,0 +1,28 @@
+{
+  "config_subentries": {
+    "device": {
+      "step": {
+        "user": {
+          "sections": {
+            "device": "mdi:power-plug",
+            "schedule": "mdi:calendar-clock",
+            "power": "mdi:flash",
+            "price_limits": "mdi:cash",
+            "weather": "mdi:weather-partly-cloudy",
+            "advanced": "mdi:cog"
+          }
+        },
+        "reconfigure": {
+          "sections": {
+            "device": "mdi:power-plug",
+            "schedule": "mdi:calendar-clock",
+            "power": "mdi:flash",
+            "price_limits": "mdi:cash",
+            "weather": "mdi:weather-partly-cloudy",
+            "advanced": "mdi:cog"
+          }
+        }
+      }
+    }
+  }
+}

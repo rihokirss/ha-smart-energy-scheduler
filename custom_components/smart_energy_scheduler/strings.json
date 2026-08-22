@@ -79,65 +79,137 @@
         "user": {
           "title": "Add a controlled device",
           "description": "The target is never toggled. Active means turn_on unless Inverted output is enabled.",
-          "data": {
-            "name": "Name",
-            "target_entity": "Target entity",
-            "inverted": "Inverted output",
-            "feedback_entity": "Active feedback entity",
-            "power_sensor": "Power sensor",
-            "power_multiplier": "Power sensor / nominal power multiplier",
-            "nominal_power_w": "Nominal power",
-            "window_start": "Allowed window starts",
-            "window_end": "Allowed window ends (same as start means all day)",
-            "base_hours": "Base hours per day",
-            "min_hours": "Minimum hours per day",
-          "max_hours": "Maximum hours per day",
-          "planning_step_minutes": "Allowed planning start times",
-          "always_on_below_eur_mwh": "Always ON at or below effective price",
-          "always_off_above_eur_mwh": "Always OFF at or above effective price",
-          "min_on_hours": "Minimum consecutive ON hours",
-            "min_off_hours": "Minimum consecutive OFF hours",
-            "use_weather": "Adjust using apparent temperature (real feel)",
-            "legacy_wind_chill": "Use legacy wind-chill formula",
-            "reference_temperature": "Reference apparent temperature",
-            "hours_per_degree": "Hours added per colder degree",
-            "weather_lookahead_hours": "Forecast averaging window",
-            "preheat_hours": "Forecast lead for thermal inertia",
-            "solar_priority": "Solar priority (lower first)",
-            "failure_mode": "Behavior when source data is missing",
-            "enabled": "Automatic control enabled"
+          "sections": {
+            "device": {
+              "name": "Device",
+              "description": "Choose the controlled target and its basic output behavior.",
+              "data": {
+                "name": "Name",
+                "target_entity": "Target entity",
+                "inverted": "Inverted output",
+                "enabled": "Automatic control enabled"
+              }
+            },
+            "schedule": {
+              "name": "Schedule and daily hours",
+              "description": "Define when and for how long this device may run.",
+              "data": {
+                "window_start": "Allowed window starts",
+                "window_end": "Allowed window ends (same as start means all day)",
+                "base_hours": "Base hours per day",
+                "min_hours": "Minimum hours per day",
+                "max_hours": "Maximum hours per day",
+                "planning_step_minutes": "Allowed planning start times",
+                "min_on_hours": "Minimum consecutive ON hours",
+                "min_off_hours": "Minimum consecutive OFF hours"
+              }
+            },
+            "power": {
+              "name": "Power and measurement",
+              "description": "Configure feedback and power measurement used to observe consumption.",
+              "data": {
+                "feedback_entity": "Active feedback entity",
+                "power_sensor": "Power sensor",
+                "power_multiplier": "Power sensor / nominal power multiplier",
+                "nominal_power_w": "Nominal power"
+              }
+            },
+            "price_limits": {
+              "name": "Price limits",
+              "description": "Optionally force the device on or off at specified effective prices.",
+              "data": {
+                "always_on_below_eur_mwh": "Always ON at or below effective price",
+                "always_off_above_eur_mwh": "Always OFF at or above effective price"
+              }
+            },
+            "weather": {
+              "name": "Weather-based control",
+              "description": "Adjust daily runtime using forecast apparent temperature.",
+              "data": {
+                "use_weather": "Adjust using apparent temperature (real feel)",
+                "legacy_wind_chill": "Use legacy wind-chill formula",
+                "reference_temperature": "Reference apparent temperature",
+                "hours_per_degree": "Hours added per colder degree",
+                "weather_lookahead_hours": "Forecast averaging window",
+                "preheat_hours": "Forecast lead for thermal inertia"
+              }
+            },
+            "advanced": {
+              "name": "Advanced behavior",
+              "description": "Set solar allocation priority and missing-data behavior.",
+              "data": {
+                "solar_priority": "Solar priority (lower first)",
+                "failure_mode": "Behavior when source data is missing"
+              }
+            }
           }
         },
         "reconfigure": {
           "title": "Update controlled device",
           "description": "Use inverted output when physical OFF means the device is allowed to run.",
-          "data": {
-            "name": "Name",
-            "target_entity": "Target entity",
-            "inverted": "Inverted output",
-            "feedback_entity": "Active feedback entity",
-            "power_sensor": "Power sensor",
-            "power_multiplier": "Power sensor / nominal power multiplier",
-            "nominal_power_w": "Nominal power",
-            "window_start": "Allowed window starts",
-            "window_end": "Allowed window ends (same as start means all day)",
-            "base_hours": "Base hours per day",
-            "min_hours": "Minimum hours per day",
-          "max_hours": "Maximum hours per day",
-          "planning_step_minutes": "Allowed planning start times",
-          "always_on_below_eur_mwh": "Always ON at or below effective price",
-          "always_off_above_eur_mwh": "Always OFF at or above effective price",
-          "min_on_hours": "Minimum consecutive ON hours",
-            "min_off_hours": "Minimum consecutive OFF hours",
-            "use_weather": "Adjust using apparent temperature (real feel)",
-            "legacy_wind_chill": "Use legacy wind-chill formula",
-            "reference_temperature": "Reference apparent temperature",
-            "hours_per_degree": "Hours added per colder degree",
-            "weather_lookahead_hours": "Forecast averaging window",
-            "preheat_hours": "Forecast lead for thermal inertia",
-            "solar_priority": "Solar priority (lower first)",
-            "failure_mode": "Behavior when source data is missing",
-            "enabled": "Automatic control enabled"
+          "sections": {
+            "device": {
+              "name": "Device",
+              "description": "Choose the controlled target and its basic output behavior.",
+              "data": {
+                "name": "Name",
+                "target_entity": "Target entity",
+                "inverted": "Inverted output",
+                "enabled": "Automatic control enabled"
+              }
+            },
+            "schedule": {
+              "name": "Schedule and daily hours",
+              "description": "Define when and for how long this device may run.",
+              "data": {
+                "window_start": "Allowed window starts",
+                "window_end": "Allowed window ends (same as start means all day)",
+                "base_hours": "Base hours per day",
+                "min_hours": "Minimum hours per day",
+                "max_hours": "Maximum hours per day",
+                "planning_step_minutes": "Allowed planning start times",
+                "min_on_hours": "Minimum consecutive ON hours",
+                "min_off_hours": "Minimum consecutive OFF hours"
+              }
+            },
+            "power": {
+              "name": "Power and measurement",
+              "description": "Configure feedback and power measurement used to observe consumption.",
+              "data": {
+                "feedback_entity": "Active feedback entity",
+                "power_sensor": "Power sensor",
+                "power_multiplier": "Power sensor / nominal power multiplier",
+                "nominal_power_w": "Nominal power"
+              }
+            },
+            "price_limits": {
+              "name": "Price limits",
+              "description": "Optionally force the device on or off at specified effective prices.",
+              "data": {
+                "always_on_below_eur_mwh": "Always ON at or below effective price",
+                "always_off_above_eur_mwh": "Always OFF at or above effective price"
+              }
+            },
+            "weather": {
+              "name": "Weather-based control",
+              "description": "Adjust daily runtime using forecast apparent temperature.",
+              "data": {
+                "use_weather": "Adjust using apparent temperature (real feel)",
+                "legacy_wind_chill": "Use legacy wind-chill formula",
+                "reference_temperature": "Reference apparent temperature",
+                "hours_per_degree": "Hours added per colder degree",
+                "weather_lookahead_hours": "Forecast averaging window",
+                "preheat_hours": "Forecast lead for thermal inertia"
+              }
+            },
+            "advanced": {
+              "name": "Advanced behavior",
+              "description": "Set solar allocation priority and missing-data behavior.",
+              "data": {
+                "solar_priority": "Solar priority (lower first)",
+                "failure_mode": "Behavior when source data is missing"
+              }
+            }
           }
         }
       },

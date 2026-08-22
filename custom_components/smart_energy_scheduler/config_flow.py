@@ -13,8 +13,21 @@ from homeassistant.config_entries import (
     SubentryFlowResult,
 )
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
 
+from .config_flow_helpers import (
+    DEVICE_SECTION_COLLAPSED,
+    SECTION_ADVANCED,
+    SECTION_DEVICE,
+    SECTION_POWER,
+    SECTION_PRICE_LIMITS,
+    SECTION_SCHEDULE,
+    SECTION_WEATHER,
+    clean_config_data,
+    device_config_error,
+    flatten_device_input,
+)
 from .const import (
     CONF_ALWAYS_OFF_ABOVE,
     CONF_ALWAYS_ON_BELOW,
@@ -167,9 +180,21 @@ def _main_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(fields)
 
 
+def _without_empty_optional_defaults(fields: dict[Any, Any]) -> dict[Any, Any]:
+    """Remove empty defaults which the frontend cannot render for optional selectors."""
+    return {
+        (
+            vol.Optional(key.schema)
+            if isinstance(key, vol.Optional) and key.default() in (None, "")
+            else key
+        ): value
+        for key, value in fields.items()
+    }
+
+
 def _device_schema(defaults: dict[str, Any]) -> vol.Schema:
-    """Build one device form."""
-    fields: dict[Any, Any] = {
+    """Build one device form with native collapsible sections."""
+    device_fields: dict[Any, Any] = {
         vol.Required("name", default=defaults.get("name", "Seade")): str,
         vol.Required(
             CONF_TARGET_ENTITY, default=defaults.get(CONF_TARGET_ENTITY)
@@ -179,20 +204,11 @@ def _device_schema(defaults: dict[str, Any]) -> vol.Schema:
         vol.Required(
             CONF_INVERTED, default=defaults.get(CONF_INVERTED, False)
         ): selector.BooleanSelector(),
-        vol.Optional(
-            CONF_FEEDBACK_ENTITY, default=defaults.get(CONF_FEEDBACK_ENTITY)
-        ): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain=["binary_sensor", "switch", "input_boolean"])
-        ),
-        vol.Optional(
-            CONF_POWER_SENSOR, default=defaults.get(CONF_POWER_SENSOR)
-        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
         vol.Required(
-            CONF_POWER_MULTIPLIER, default=defaults.get(CONF_POWER_MULTIPLIER, 1.0)
-        ): _number(0.001, 1000, 0.001),
-        vol.Required(
-            CONF_NOMINAL_POWER_W, default=defaults.get(CONF_NOMINAL_POWER_W, 1000.0)
-        ): _number(1, 100000, 10, "W"),
+            CONF_ENABLED, default=defaults.get(CONF_ENABLED, True)
+        ): selector.BooleanSelector(),
+    }
+    schedule_fields: dict[Any, Any] = {
         vol.Required(
             CONF_WINDOW_START, default=defaults.get(CONF_WINDOW_START, "00:00:00")
         ): selector.TimeSelector(),
@@ -218,18 +234,38 @@ def _device_schema(defaults: dict[str, Any]) -> vol.Schema:
                 translation_key="planning_step_minutes",
             )
         ),
-        vol.Optional(CONF_ALWAYS_ON_BELOW, default=defaults.get(CONF_ALWAYS_ON_BELOW)): _number(
-            0, 1000, 1, "EUR/MWh"
-        ),
-        vol.Optional(CONF_ALWAYS_OFF_ABOVE, default=defaults.get(CONF_ALWAYS_OFF_ABOVE)): _number(
-            0, 1000, 1, "EUR/MWh"
-        ),
         vol.Required(CONF_MIN_ON_HOURS, default=defaults.get(CONF_MIN_ON_HOURS, 1)): _number(
             1, 24, 1, "h"
         ),
         vol.Required(CONF_MIN_OFF_HOURS, default=defaults.get(CONF_MIN_OFF_HOURS, 1)): _number(
             1, 24, 1, "h"
         ),
+    }
+    power_fields: dict[Any, Any] = {
+        vol.Optional(
+            CONF_FEEDBACK_ENTITY, default=defaults.get(CONF_FEEDBACK_ENTITY)
+        ): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=["binary_sensor", "switch", "input_boolean"])
+        ),
+        vol.Optional(
+            CONF_POWER_SENSOR, default=defaults.get(CONF_POWER_SENSOR)
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        vol.Required(
+            CONF_POWER_MULTIPLIER, default=defaults.get(CONF_POWER_MULTIPLIER, 1.0)
+        ): _number(0.001, 1000, 0.001),
+        vol.Required(
+            CONF_NOMINAL_POWER_W, default=defaults.get(CONF_NOMINAL_POWER_W, 1000.0)
+        ): _number(1, 100000, 10, "W"),
+    }
+    price_fields: dict[Any, Any] = {
+        vol.Optional(CONF_ALWAYS_ON_BELOW, default=defaults.get(CONF_ALWAYS_ON_BELOW)): _number(
+            0, 1000, 1, "EUR/MWh"
+        ),
+        vol.Optional(CONF_ALWAYS_OFF_ABOVE, default=defaults.get(CONF_ALWAYS_OFF_ABOVE)): _number(
+            0, 1000, 1, "EUR/MWh"
+        ),
+    }
+    weather_fields: dict[Any, Any] = {
         vol.Required(
             CONF_USE_WEATHER, default=defaults.get(CONF_USE_WEATHER, False)
         ): selector.BooleanSelector(),
@@ -250,6 +286,8 @@ def _device_schema(defaults: dict[str, Any]) -> vol.Schema:
         vol.Required(CONF_PREHEAT_HOURS, default=defaults.get(CONF_PREHEAT_HOURS, 0)): _number(
             0, 24, 1, "h"
         ),
+    }
+    advanced_fields: dict[Any, Any] = {
         vol.Required(CONF_SOLAR_PRIORITY, default=defaults.get(CONF_SOLAR_PRIORITY, 1)): _number(
             1, 100, 1
         ),
@@ -261,35 +299,24 @@ def _device_schema(defaults: dict[str, Any]) -> vol.Schema:
                 translation_key="failure_mode",
             )
         ),
-        vol.Required(
-            CONF_ENABLED, default=defaults.get(CONF_ENABLED, True)
-        ): selector.BooleanSelector(),
     }
-    fields = {
-        (
-            vol.Optional(key.schema)
-            if isinstance(key, vol.Optional) and key.default() is None
-            else key
-        ): value
-        for key, value in fields.items()
+    fields_by_section = {
+        SECTION_DEVICE: device_fields,
+        SECTION_SCHEDULE: schedule_fields,
+        SECTION_POWER: power_fields,
+        SECTION_PRICE_LIMITS: price_fields,
+        SECTION_WEATHER: weather_fields,
+        SECTION_ADVANCED: advanced_fields,
     }
-    return vol.Schema(fields)
-
-
-def _clean(data: dict[str, Any]) -> dict[str, Any]:
-    """Remove empty optional selectors from config entry storage."""
-    return {key: value for key, value in data.items() if value not in (None, "")}
-
-
-def _device_error(data: dict[str, Any]) -> str | None:
-    """Validate relationships which selectors cannot express."""
-    if float(data[CONF_MIN_HOURS]) > float(data[CONF_MAX_HOURS]):
-        return "invalid_hour_limits"
-    always_on = data.get(CONF_ALWAYS_ON_BELOW)
-    always_off = data.get(CONF_ALWAYS_OFF_ABOVE)
-    if always_on is not None and always_off is not None and float(always_on) >= float(always_off):
-        return "invalid_price_limits"
-    return None
+    return vol.Schema(
+        {
+            vol.Required(section_key): section(
+                vol.Schema(_without_empty_optional_defaults(fields)),
+                {"collapsed": DEVICE_SECTION_COLLAPSED[section_key]},
+            )
+            for section_key, fields in fields_by_section.items()
+        }
+    )
 
 
 class SmartEnergySchedulerConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -317,7 +344,7 @@ class SmartEnergySchedulerConfigFlow(ConfigFlow, domain=DOMAIN):
                 heat_pump = dict(DEFAULT_HEAT_PUMP)
                 return self.async_create_entry(
                     title="Smart Energy Scheduler",
-                    data=_clean(user_input),
+                    data=clean_config_data(user_input),
                     subentries=[
                         {
                             "subentry_type": SUBENTRY_DEVICE,
@@ -342,7 +369,9 @@ class SmartEnergySchedulerConfigFlow(ConfigFlow, domain=DOMAIN):
             if not user_input[CONF_TARIFF_CONFIRMED]:
                 errors[CONF_TARIFF_CONFIRMED] = "tariff_not_confirmed"
             else:
-                self.hass.config_entries.async_update_entry(entry, data=_clean(user_input))
+                self.hass.config_entries.async_update_entry(
+                    entry, data=clean_config_data(user_input)
+                )
                 return self.async_abort(reason="reconfigure_successful")
         return self.async_show_form(
             step_id="reconfigure",
@@ -356,14 +385,15 @@ class DeviceSubentryFlow(ConfigSubentryFlow):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         if user_input is not None:
-            if not (error := _device_error(user_input)):
-                name = user_input.pop("name")
+            device_data = flatten_device_input(user_input)
+            if not (error := device_config_error(device_data)):
+                name = device_data.pop("name")
                 entry = self._get_entry()
                 self.hass.config_entries.async_schedule_reload(entry.entry_id)
-                return self.async_create_entry(title=name, data=_clean(user_input))
+                return self.async_create_entry(title=name, data=clean_config_data(device_data))
             return self.async_show_form(
                 step_id="user",
-                data_schema=_device_schema(user_input),
+                data_schema=_device_schema(device_data),
                 errors={"base": error},
             )
         return self.async_show_form(step_id="user", data_schema=_device_schema({}), errors={})
@@ -374,14 +404,15 @@ class DeviceSubentryFlow(ConfigSubentryFlow):
         entry = self._get_entry()
         subentry = self._get_reconfigure_subentry()
         if user_input is not None:
-            if not (error := _device_error(user_input)):
-                name = user_input.pop("name")
+            device_data = flatten_device_input(user_input)
+            if not (error := device_config_error(device_data)):
+                name = device_data.pop("name")
                 return self.async_update_and_abort(
-                    entry, subentry, title=name, data=_clean(user_input)
+                    entry, subentry, title=name, data=clean_config_data(device_data)
                 )
             return self.async_show_form(
                 step_id="reconfigure",
-                data_schema=_device_schema(user_input),
+                data_schema=_device_schema(device_data),
                 errors={"base": error},
             )
         defaults = dict(subentry.data) | {"name": subentry.title}

@@ -79,65 +79,137 @@
         "user": {
           "title": "Juhitava seadme lisamine",
           "description": "Sihtolemit ei toggle'ita. Aktiivne tähendab turn_on, kui pööratud väljund pole valitud.",
-          "data": {
-            "name": "Nimi",
-            "target_entity": "Sihtolem",
-            "inverted": "Pööratud väljund",
-            "feedback_entity": "Töötamise tagasiside olem",
-            "power_sensor": "Võimsussensor",
-            "power_multiplier": "Võimsuse kordaja",
-            "nominal_power_w": "Nimivõimsus",
-            "window_start": "Lubatud tööakna algus",
-            "window_end": "Lubatud tööakna lõpp",
-            "base_hours": "Baastunnid päevas",
-            "min_hours": "Minimaalsed tunnid päevas",
-          "max_hours": "Maksimaalsed tunnid päevas",
-          "planning_step_minutes": "Lubatud planeerimise algusajad",
-          "always_on_below_eur_mwh": "Alati sees selle efektiivhinnaga või alla",
-          "always_off_above_eur_mwh": "Alati väljas selle efektiivhinnaga või üle",
-          "min_on_hours": "Minimaalne järjestikune ON",
-            "min_off_hours": "Minimaalne järjestikune OFF",
-            "use_weather": "Kasuta näivat temperatuuri (real feel)",
-            "legacy_wind_chill": "Kasuta vana tuulekülma valemit",
-            "reference_temperature": "Näiv referentstemperatuur",
-            "hours_per_degree": "Lisatunnid külmema kraadi kohta",
-            "weather_lookahead_hours": "Prognoosi keskmistamise aken",
-            "preheat_hours": "Prognoosi ettevaade hoone inertsi jaoks",
-            "solar_priority": "Päikeseprioriteet",
-            "failure_mode": "Käitumine andmevea korral",
-            "enabled": "Automaatjuhtimine lubatud"
+          "sections": {
+            "device": {
+              "name": "Seade",
+              "description": "Vali juhitav sihtolem ja väljundi põhikäitumine.",
+              "data": {
+                "name": "Nimi",
+                "target_entity": "Sihtolem",
+                "inverted": "Pööratud väljund",
+                "enabled": "Automaatjuhtimine lubatud"
+              }
+            },
+            "schedule": {
+              "name": "Tööaken ja tunnid",
+              "description": "Määra, millal ja kui kaua seade võib töötada.",
+              "data": {
+                "window_start": "Lubatud tööakna algus",
+                "window_end": "Lubatud tööakna lõpp (algusega sama tähendab tervet päeva)",
+                "base_hours": "Baastunnid päevas",
+                "min_hours": "Minimaalsed tunnid päevas",
+                "max_hours": "Maksimaalsed tunnid päevas",
+                "planning_step_minutes": "Lubatud planeerimise algusajad",
+                "min_on_hours": "Minimaalne järjestikune ON",
+                "min_off_hours": "Minimaalne järjestikune OFF"
+              }
+            },
+            "power": {
+              "name": "Võimsus ja mõõtmine",
+              "description": "Seadista tarbimise jälgimiseks tagasiside ja võimsuse mõõtmine.",
+              "data": {
+                "feedback_entity": "Töötamise tagasiside olem",
+                "power_sensor": "Võimsussensor",
+                "power_multiplier": "Võimsuse kordaja",
+                "nominal_power_w": "Nimivõimsus"
+              }
+            },
+            "price_limits": {
+              "name": "Hinnapiirid",
+              "description": "Soovi korral sunni seade määratud efektiivhinna juures sisse või välja.",
+              "data": {
+                "always_on_below_eur_mwh": "Alati sees selle efektiivhinnaga või alla",
+                "always_off_above_eur_mwh": "Alati väljas selle efektiivhinnaga või üle"
+              }
+            },
+            "weather": {
+              "name": "Ilmapõhine juhtimine",
+              "description": "Kohanda päevast tööaega prognoositud näiva temperatuuri järgi.",
+              "data": {
+                "use_weather": "Kasuta näivat temperatuuri (real feel)",
+                "legacy_wind_chill": "Kasuta vana tuulekülma valemit",
+                "reference_temperature": "Näiv referentstemperatuur",
+                "hours_per_degree": "Lisatunnid külmema kraadi kohta",
+                "weather_lookahead_hours": "Prognoosi keskmistamise aken",
+                "preheat_hours": "Prognoosi ettevaade hoone inertsi jaoks"
+              }
+            },
+            "advanced": {
+              "name": "Täpsem käitumine",
+              "description": "Määra päikeseenergia jaotamise prioriteet ja käitumine andmevea korral.",
+              "data": {
+                "solar_priority": "Päikeseprioriteet",
+                "failure_mode": "Käitumine andmevea korral"
+              }
+            }
           }
         },
         "reconfigure": {
           "title": "Juhitava seadme muutmine",
           "description": "Vali pööratud väljund, kui füüsiline OFF tähendab töötamise lubamist.",
-          "data": {
-            "name": "Nimi",
-            "target_entity": "Sihtolem",
-            "inverted": "Pööratud väljund",
-            "feedback_entity": "Töötamise tagasiside olem",
-            "power_sensor": "Võimsussensor",
-            "power_multiplier": "Võimsuse kordaja",
-            "nominal_power_w": "Nimivõimsus",
-            "window_start": "Lubatud tööakna algus",
-            "window_end": "Lubatud tööakna lõpp",
-            "base_hours": "Baastunnid päevas",
-            "min_hours": "Minimaalsed tunnid päevas",
-          "max_hours": "Maksimaalsed tunnid päevas",
-          "planning_step_minutes": "Lubatud planeerimise algusajad",
-          "always_on_below_eur_mwh": "Alati sees selle efektiivhinnaga või alla",
-          "always_off_above_eur_mwh": "Alati väljas selle efektiivhinnaga või üle",
-          "min_on_hours": "Minimaalne järjestikune ON",
-            "min_off_hours": "Minimaalne järjestikune OFF",
-            "use_weather": "Kasuta näivat temperatuuri (real feel)",
-            "legacy_wind_chill": "Kasuta vana tuulekülma valemit",
-            "reference_temperature": "Näiv referentstemperatuur",
-            "hours_per_degree": "Lisatunnid külmema kraadi kohta",
-            "weather_lookahead_hours": "Prognoosi keskmistamise aken",
-            "preheat_hours": "Prognoosi ettevaade hoone inertsi jaoks",
-            "solar_priority": "Päikeseprioriteet",
-            "failure_mode": "Käitumine andmevea korral",
-            "enabled": "Automaatjuhtimine lubatud"
+          "sections": {
+            "device": {
+              "name": "Seade",
+              "description": "Vali juhitav sihtolem ja väljundi põhikäitumine.",
+              "data": {
+                "name": "Nimi",
+                "target_entity": "Sihtolem",
+                "inverted": "Pööratud väljund",
+                "enabled": "Automaatjuhtimine lubatud"
+              }
+            },
+            "schedule": {
+              "name": "Tööaken ja tunnid",
+              "description": "Määra, millal ja kui kaua seade võib töötada.",
+              "data": {
+                "window_start": "Lubatud tööakna algus",
+                "window_end": "Lubatud tööakna lõpp (algusega sama tähendab tervet päeva)",
+                "base_hours": "Baastunnid päevas",
+                "min_hours": "Minimaalsed tunnid päevas",
+                "max_hours": "Maksimaalsed tunnid päevas",
+                "planning_step_minutes": "Lubatud planeerimise algusajad",
+                "min_on_hours": "Minimaalne järjestikune ON",
+                "min_off_hours": "Minimaalne järjestikune OFF"
+              }
+            },
+            "power": {
+              "name": "Võimsus ja mõõtmine",
+              "description": "Seadista tarbimise jälgimiseks tagasiside ja võimsuse mõõtmine.",
+              "data": {
+                "feedback_entity": "Töötamise tagasiside olem",
+                "power_sensor": "Võimsussensor",
+                "power_multiplier": "Võimsuse kordaja",
+                "nominal_power_w": "Nimivõimsus"
+              }
+            },
+            "price_limits": {
+              "name": "Hinnapiirid",
+              "description": "Soovi korral sunni seade määratud efektiivhinna juures sisse või välja.",
+              "data": {
+                "always_on_below_eur_mwh": "Alati sees selle efektiivhinnaga või alla",
+                "always_off_above_eur_mwh": "Alati väljas selle efektiivhinnaga või üle"
+              }
+            },
+            "weather": {
+              "name": "Ilmapõhine juhtimine",
+              "description": "Kohanda päevast tööaega prognoositud näiva temperatuuri järgi.",
+              "data": {
+                "use_weather": "Kasuta näivat temperatuuri (real feel)",
+                "legacy_wind_chill": "Kasuta vana tuulekülma valemit",
+                "reference_temperature": "Näiv referentstemperatuur",
+                "hours_per_degree": "Lisatunnid külmema kraadi kohta",
+                "weather_lookahead_hours": "Prognoosi keskmistamise aken",
+                "preheat_hours": "Prognoosi ettevaade hoone inertsi jaoks"
+              }
+            },
+            "advanced": {
+              "name": "Täpsem käitumine",
+              "description": "Määra päikeseenergia jaotamise prioriteet ja käitumine andmevea korral.",
+              "data": {
+                "solar_priority": "Päikeseprioriteet",
+                "failure_mode": "Käitumine andmevea korral"
+              }
+            }
           }
         }
       },
