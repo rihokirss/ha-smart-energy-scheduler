@@ -125,6 +125,10 @@ def test_heating_curve_card_is_editable_and_shows_forecast_points() -> None:
     assert ".chart{overflow:hidden" in source
     assert "min-width:560px" not in source
     assert 'class="axis-label"' in source
+    assert 'class="saved-curve"' in source
+    assert 'class="preview-curve"' in source
+    assert "liugurite eelvaade" in source
+    assert 'querySelector(".preview-curve")' in source
     assert ".axis-label{font-size:16px" in source
     assert "--ha-card-header-font-family" in source
     assert "--ha-card-header-font-size" in source
