@@ -483,6 +483,9 @@ class SmartEnergyHeatingCurveCard extends SmartEnergySchedulerCard {
       }
       payload[input.dataset.setting] = input.localName === "ha-switch" ? input.checked : Number(input.value);
     });
+    this.shadowRoot.querySelectorAll("[data-choice-setting]").forEach((choice) => {
+      payload[choice.dataset.choiceSetting] = Number(choice.dataset.value);
+    });
     const status = this.shadowRoot.querySelector(".save-status");
     if (payload.min_hours > payload.max_hours) {
       status.textContent = "Miinimum ei tohi olla maksimumist suurem.";
@@ -541,7 +544,13 @@ class SmartEnergyHeatingCurveCard extends SmartEnergySchedulerCard {
     const forecastPoints = Object.entries(temperatures).map(([day, temperature], index) => {
       const hours = required[day] ?? this._curveHours(Number(temperature), settings);
       const color = index === 0 ? "#ef6c00" : "#7b1fa2";
-      return `<g><circle cx="${x(Number(temperature))}" cy="${y(Number(hours))}" r="7" fill="${color}" stroke="var(--card-background-color,#fff)" stroke-width="2"><title>${this._escape(day)}: ${Number(temperature).toFixed(1)} °C → ${hours} h</title></circle><text x="${x(Number(temperature)) + 10}" y="${y(Number(hours)) - 9}" class="point-label">${this._escape(day)} · ${Number(temperature).toFixed(1)}° · ${hours}h</text></g>`;
+      const pointX = x(Number(temperature));
+      const pointY = y(Number(hours));
+      const labelOnLeft = pointX > width - 210;
+      const labelX = pointX + (labelOnLeft ? -12 : 12);
+      const labelY = Math.max(top + 14, Math.min(height - bottom - 8,
+        pointY + (index % 2 === 0 ? -13 : 23)));
+      return `<g><circle cx="${pointX}" cy="${pointY}" r="7" fill="${color}" stroke="var(--card-background-color,#fff)" stroke-width="2"><title>${this._escape(day)}: ${Number(temperature).toFixed(1)} °C → ${hours} h</title></circle><text x="${labelX}" y="${labelY}" text-anchor="${labelOnLeft ? "end" : "start"}" class="point-label">${this._escape(day)} · ${Number(temperature).toFixed(1)}° · ${hours}h</text></g>`;
     }).join("");
     const fields = [
       ["base_hours", "Baastunnid", 0, 25, 1, "h"],
@@ -549,13 +558,14 @@ class SmartEnergyHeatingCurveCard extends SmartEnergySchedulerCard {
       ["hours_per_degree", "Mõju kraadi kohta", 0, 5, .1, "h/°C"],
       ["min_hours", "Miinimum", 0, 25, 1, "h"],
       ["max_hours", "Maksimum", 0, 25, 1, "h"],
-      ["planning_step_minutes", "Planeerimise samm", 15, 60, 45, "min"],
       ["weather_lookahead_hours", "Keskmistamise aken", 1, 48, 1, "h"],
       ["preheat_hours", "Prognoosiakna nihe tulevikku", 0, 24, 1, "h"],
     ].map(([key, label, min, max, step, unit]) => {
       const value = Number(settings[key] ?? 0);
       return `<label class="slider"><span><b>${label}</b><output data-value="${key}">${value} ${unit}</output></span><ha-slider data-setting="${key}" data-value="${value}" data-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${value}" with-tooltip></ha-slider></label>`;
     }).join("");
+    const planningStep = Number(settings.planning_step_minutes) === 15 ? 15 : 60;
+    const planningStepChoice = `<div class="step-choice" data-choice-setting="planning_step_minutes" data-value="${planningStep}"><span>Planeerimise samm</span><div class="step-buttons"><ha-button data-planning-step="15" variant="${planningStep === 15 ? "brand" : "neutral"}" appearance="${planningStep === 15 ? "filled" : "outlined"}">15 min</ha-button><ha-button data-planning-step="60" variant="${planningStep === 60 ? "brand" : "neutral"}" appearance="${planningStep === 60 ? "filled" : "outlined"}">60 min</ha-button></div></div>`;
     const priceFields = [
       ["always_on_below_eur_mwh", "Alati sees hinnaga kuni", 0, 1000, 5, "€/MWh", 0],
       ["always_off_above_eur_mwh", "Alati väljas hinnaga alates", 0, 1000, 5, "€/MWh", 500],
@@ -569,12 +579,12 @@ class SmartEnergyHeatingCurveCard extends SmartEnergySchedulerCard {
       `${day}: ${Number(temperature).toFixed(1)} °C → ${required[day] ?? "–"} h`
     ).join(" · ");
     this.shadowRoot.innerHTML = `<style>
-      :host{display:block;min-width:0}ha-card{padding:var(--ha-space-4,16px);overflow:hidden}.head{display:flex;justify-content:space-between;gap:var(--ha-space-3,12px);align-items:flex-start}.card-title{color:var(--ha-card-header-color,var(--primary-text-color));font-family:var(--ha-card-header-font-family,inherit);font-size:var(--ha-card-header-font-size,var(--ha-font-size-2xl,24px));font-weight:var(--ha-font-weight-normal,400);letter-spacing:-.012em;line-height:var(--ha-line-height-expanded,1.5);margin:0 0 var(--ha-space-1,4px)}.sub,.note,.save-status{font-size:var(--ha-font-size-m,14px);color:var(--secondary-text-color)}.chart{overflow:hidden;margin-top:var(--ha-space-3,12px);width:100%;min-width:0}svg{display:block;width:100%;max-width:100%;min-width:0;height:auto}svg text{font-family:var(--ha-font-family-body,inherit);font-size:12px;fill:var(--secondary-text-color)}svg .axis-label{font-size:16px;font-weight:var(--ha-font-weight-normal,400);fill:var(--primary-text-color)}svg .point-label{font-size:14px;font-weight:var(--ha-font-weight-medium,500);fill:var(--primary-text-color)}.settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--ha-space-4,16px);margin-top:var(--ha-space-4,16px)}.slider{display:block;min-width:0}.slider>span{display:flex;justify-content:space-between;align-items:baseline;gap:var(--ha-space-2,8px);font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin-bottom:var(--ha-space-1,4px)}.slider b{font-weight:var(--ha-font-weight-normal,400)}.slider output{color:var(--primary-text-color);white-space:nowrap}.slider ha-slider{display:block;width:100%;min-width:0}.price-value{display:flex;align-items:center;gap:var(--ha-space-2,8px)}.price-value ha-switch{transform:scale(.85)}.settings .check{grid-column:1/-1;color:var(--primary-text-color);font-size:var(--ha-font-size-m,14px)}.actions{display:flex;align-items:center;gap:var(--ha-space-3,12px);margin-top:var(--ha-space-4,16px)}.save-status.error,.error{color:var(--error-color,#db4437)}.formula{font-family:var(--ha-font-family-code,monospace);font-size:var(--ha-font-size-m,14px);color:var(--secondary-text-color);margin-top:var(--ha-space-2,8px)}.badge{font-size:var(--ha-font-size-s,12px);padding:var(--ha-space-1,4px) var(--ha-space-2,8px);border-radius:var(--ha-border-radius-pill,999px);background:var(--warning-color,#f5a623);color:#111}.badge.live{background:var(--success-color,#43a047);color:#fff}@media(max-width:600px){ha-card{padding:var(--ha-space-3,12px)}.settings{grid-template-columns:minmax(0,1fr)}.head{gap:var(--ha-space-2,8px)}}
+      :host{display:block;min-width:0}ha-card{padding:var(--ha-space-4,16px);overflow:hidden}.head{display:flex;justify-content:space-between;gap:var(--ha-space-3,12px);align-items:flex-start}.card-title{color:var(--ha-card-header-color,var(--primary-text-color));font-family:var(--ha-card-header-font-family,inherit);font-size:var(--ha-card-header-font-size,var(--ha-font-size-2xl,24px));font-weight:var(--ha-font-weight-normal,400);letter-spacing:-.012em;line-height:var(--ha-line-height-expanded,1.5);margin:0 0 var(--ha-space-1,4px)}.sub,.note,.save-status{font-size:var(--ha-font-size-m,14px);color:var(--secondary-text-color)}.chart{overflow:hidden;margin-top:var(--ha-space-3,12px);width:100%;min-width:0}svg{display:block;width:100%;max-width:100%;min-width:0;height:auto}svg text{font-family:var(--ha-font-family-body,inherit);font-size:12px;fill:var(--secondary-text-color)}svg .axis-label{font-size:16px;font-weight:var(--ha-font-weight-normal,400);fill:var(--primary-text-color)}svg .point-label{font-size:14px;font-weight:var(--ha-font-weight-medium,500);fill:var(--primary-text-color)}.settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--ha-space-4,16px);margin-top:var(--ha-space-4,16px)}.slider,.step-choice{display:block;min-width:0}.slider>span{display:flex;justify-content:space-between;align-items:baseline;gap:var(--ha-space-2,8px);font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin-bottom:var(--ha-space-1,4px)}.slider b{font-weight:var(--ha-font-weight-normal,400)}.slider output{color:var(--primary-text-color);white-space:nowrap}.slider ha-slider{display:block;width:100%;min-width:0}.step-choice>span{display:block;font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color);margin-bottom:var(--ha-space-2,8px)}.step-buttons{display:flex;gap:var(--ha-space-2,8px)}.step-buttons ha-button{flex:1}.price-value{display:flex;align-items:center;gap:var(--ha-space-2,8px)}.price-value ha-switch{transform:scale(.85)}.settings .check{grid-column:1/-1;color:var(--primary-text-color);font-size:var(--ha-font-size-m,14px)}.actions{display:flex;align-items:center;gap:var(--ha-space-3,12px);margin-top:var(--ha-space-4,16px)}.save-status.error,.error{color:var(--error-color,#db4437)}.formula{font-family:var(--ha-font-family-code,monospace);font-size:var(--ha-font-size-m,14px);color:var(--secondary-text-color);margin-top:var(--ha-space-2,8px)}.badge{font-size:var(--ha-font-size-s,12px);padding:var(--ha-space-1,4px) var(--ha-space-2,8px);border-radius:var(--ha-border-radius-pill,999px);background:var(--warning-color,#f5a623);color:#111}.badge.live{background:var(--success-color,#43a047);color:#fff}@media(max-width:600px){ha-card{padding:var(--ha-space-3,12px)}.settings{grid-template-columns:minmax(0,1fr)}.head{gap:var(--ha-space-2,8px)}}
     </style><ha-card>
       <div class="head"><div><h1 class="card-title">${this._escape(this.config.title)}</h1><div class="sub">${this._escape(device.name)} · ${this._escape(summary || "prognoos puudub")}</div><div class="formula">tunnid = ${Number(settings.base_hours)} + (${Number(settings.reference_temperature)} − temperatuur) × ${Number(settings.hours_per_degree)}</div></div><span class="badge ${this.data.shadow_mode ? "" : "live"}">${this.data.shadow_mode ? "VARIREŽIIM" : "AKTIIVNE"}</span></div>
       <div class="chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Küttekõver: töötunnid sõltuvalt näivast välistemperatuurist">${horizontalGrid}${verticalGrid}<polyline points="${curve.join(" ")}" fill="none" stroke="#2196f3" stroke-width="4" stroke-linejoin="round"/>${forecastPoints}</svg></div>
       <div class="note">RealFeel-keskmine: ${Number(settings.weather_lookahead_hours)} h prognoosiaken, algus ${Number(settings.preheat_hours)} h ettepoole. Oranž/lilla punkt näitab prognoosist arvutatud vajadust.</div>
-      <div class="settings">${fields}${priceFields}${realFeelMode}</div>
+      <div class="settings">${fields}${planningStepChoice}${priceFields}${realFeelMode}</div>
       <div class="note">Planeerimise samm 15 min lubab algusi :00/:15/:30/:45; 60 min lubab ainult täistunde. Minimaalne ON/OFF kestus jääb tundidesse. Hinnapiirid kasutavad seadme efektiivhinda koos tariifide, käibemaksu ja PV prognoosiga. Päeva miinimumtunnid võivad alati-väljas piiri ohutuse huvides ületada.</div>
       <div class="actions"><ha-button class="save" variant="brand" appearance="filled">Rakenda ja arvuta plaan uuesti</ha-button><span class="save-status"></span></div>
     </ha-card>`;
@@ -591,6 +601,17 @@ class SmartEnergyHeatingCurveCard extends SmartEnergySchedulerCard {
       input.addEventListener("input", () => {
         const output = this.shadowRoot.querySelector(`output[data-value="${input.dataset.setting}"]`);
         if (output) output.textContent = `${input.value} ${input.dataset.unit}`;
+      });
+    });
+    this.shadowRoot.querySelectorAll("ha-button[data-planning-step]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const choice = button.closest("[data-choice-setting]");
+        choice.dataset.value = button.dataset.planningStep;
+        choice.querySelectorAll("ha-button[data-planning-step]").forEach((item) => {
+          const selected = item.dataset.planningStep === choice.dataset.value;
+          item.variant = selected ? "brand" : "neutral";
+          item.appearance = selected ? "filled" : "outlined";
+        });
       });
     });
     this.shadowRoot.querySelectorAll("ha-switch[data-enable]").forEach((enable) => {

@@ -132,7 +132,10 @@ def test_heating_curve_card_is_editable_and_shows_forecast_points() -> None:
     assert '"always_off_above_eur_mwh"' in source
     assert '"Alati sees hinnaga kuni", 0, 1000' in source
     assert '"Alati väljas hinnaga alates", 0, 1000' in source
-    assert '"planning_step_minutes", "Planeerimise samm", 15, 60, 45' in source
+    assert 'data-choice-setting="planning_step_minutes"' in source
+    assert 'data-planning-step="15"' in source
+    assert 'data-planning-step="60"' in source
+    assert '"planning_step_minutes", "Planeerimise samm", 15, 60, 45' not in source
     assert "15 min lubab algusi :00/:15/:30/:45" in source
     assert 'data-enable="${key}"' in source
     assert "Päeva miinimumtunnid võivad" in source
