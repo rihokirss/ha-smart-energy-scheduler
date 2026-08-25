@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from homeassistant.components.energy.data import async_get_manager
@@ -87,6 +87,7 @@ from .engine import (
     build_plans,
     distribute_hour_energy,
     forecast_window_average,
+    is_complete_price_day,
     is_in_window,
     legacy_wind_chill,
     merge_solar_forecast,
@@ -94,11 +95,20 @@ from .engine import (
     parse_datetime,
     parse_nordpool_response,
     price_intervals,
+    protect_minimum_cycle,
     weather_target_hours,
 )
-from .models import DevicePlan, DeviceRuntimeState, HourPrice, PlanningDevice, TariffConfig
+from .models import (
+    DevicePlan,
+    DeviceRuntimeState,
+    HourPrice,
+    PlanningDevice,
+    QuarterPrice,
+    TariffConfig,
+)
 
 _LOGGER = logging.getLogger(__name__)
+_NEXT_DAY_PRICE_FETCH_TIME = time(13, 30)
 
 
 @dataclass(slots=True)
@@ -129,6 +139,9 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
         self.states: dict[str, DeviceRuntimeState] = {}
         self._store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}")
         self._apply_lock = asyncio.Lock()
+        self._price_cache: dict[tuple[datetime, datetime], QuarterPrice] = {}
+        self._price_cache_updated_at: datetime | None = None
+        self._complete_price_days: set[str] = set()
 
     @property
     def device_subentries(self) -> list[ConfigSubentry]:
@@ -138,6 +151,27 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
     async def async_load_state(self) -> None:
         """Restore overrides and runtime counters."""
         stored = await self._store.async_load() or {}
+        now = dt_util.now().astimezone(self.timezone)
+        cache_cutoff = now - timedelta(days=2)
+        for raw_price in stored.get("price_cache", []):
+            try:
+                start = parse_datetime(raw_price["start"])
+                end = parse_datetime(raw_price["end"])
+                market_price = float(raw_price["market_eur_mwh"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if end <= start or end < cache_cutoff:
+                continue
+            quarter = QuarterPrice(start, end, market_price)
+            self._price_cache[(start, end)] = quarter
+        if raw_cache_updated_at := stored.get("price_cache_updated_at"):
+            try:
+                self._price_cache_updated_at = parse_datetime(raw_cache_updated_at)
+            except (TypeError, ValueError):
+                self._price_cache_updated_at = None
+        self._complete_price_days = {
+            str(day) for day in stored.get("complete_price_days", [])
+        }
         for subentry in self.device_subentries:
             raw = stored.get("devices", {}).get(subentry.subentry_id, {})
             observation_source = self._observation_source(subentry)
@@ -189,6 +223,22 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
         """Persist small mutable state; the plan itself is recalculated."""
         await self._store.async_save(
             {
+                "price_cache_updated_at": (
+                    self._price_cache_updated_at.isoformat()
+                    if self._price_cache_updated_at
+                    else None
+                ),
+                "complete_price_days": sorted(self._complete_price_days),
+                "price_cache": [
+                    {
+                        "start": quarter.start.isoformat(),
+                        "end": quarter.end.isoformat(),
+                        "market_eur_mwh": quarter.market_eur_mwh,
+                    }
+                    for quarter in sorted(
+                        self._price_cache.values(), key=lambda item: item.start
+                    )
+                ],
                 "devices": {
                     device_id: {
                         "enabled": state.enabled,
@@ -344,20 +394,30 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                 state.locked_hour_start = None
                 state.locked_active = None
         try:
-            price_days = [
+            relevant_price_days = [
                 now.date() - timedelta(days=1),
                 now.date(),
                 now.date() + timedelta(days=1),
             ]
-            price_payloads = await asyncio.gather(
-                *(self._async_fetch_prices(day) for day in price_days),
-                return_exceptions=True,
-            )
-            quarters = []
-            for day, payload in zip(price_days, price_payloads, strict=True):
-                if isinstance(payload, asyncio.CancelledError):
-                    raise payload
-                if isinstance(payload, Exception):
+            price_days = relevant_price_days[:2]
+            local_time = now.timetz().replace(tzinfo=None)
+            if local_time >= _NEXT_DAY_PRICE_FETCH_TIME:
+                price_days.append(relevant_price_days[2])
+            fresh_quarters: list[QuarterPrice] = []
+            cache_needed = False
+            # The Nord Pool action is not guaranteed to be re-entrant. Fetch the
+            # delivery days sequentially and retain the last valid response when
+            # one refresh temporarily returns no action response.
+            for day in price_days:
+                day_key = day.isoformat()
+                if day_key in self._complete_price_days:
+                    continue
+                try:
+                    payload = await self._async_fetch_prices(day)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - stale cache is the fallback
+                    cache_needed = True
                     if day > now.date() and "next_day_prices_pending" not in warnings:
                         warnings.append("next_day_prices_pending")
                     elif day == now.date():
@@ -365,13 +425,38 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     continue
                 parsed = parse_nordpool_response(payload, self.entry.data[CONF_AREA])
                 if not parsed:
+                    cache_needed = True
                     if day > now.date() and "next_day_prices_pending" not in warnings:
                         warnings.append("next_day_prices_pending")
                     elif day == now.date():
                         warnings.append("current_day_prices_unavailable")
                     continue
-                quarters.extend(parsed)
-            unique_quarters = {(quarter.start, quarter.end): quarter for quarter in quarters}
+                fresh_quarters.extend(parsed)
+                if is_complete_price_day(parsed):
+                    self._complete_price_days.add(day_key)
+                else:
+                    cache_needed = True
+                    if day > now.date() and "next_day_prices_pending" not in warnings:
+                        warnings.append("next_day_prices_pending")
+                    elif day == now.date():
+                        warnings.append("current_day_prices_incomplete")
+            if fresh_quarters:
+                self._price_cache.update(
+                    {(quarter.start, quarter.end): quarter for quarter in fresh_quarters}
+                )
+                self._price_cache_updated_at = now
+            cache_start = now - timedelta(days=2)
+            cache_end = now + timedelta(days=3)
+            self._price_cache = {
+                key: quarter
+                for key, quarter in self._price_cache.items()
+                if quarter.end >= cache_start and quarter.start <= cache_end
+            }
+            relevant_day_keys = {day.isoformat() for day in relevant_price_days}
+            self._complete_price_days.intersection_update(relevant_day_keys)
+            if cache_needed and self._price_cache and "price_cache_used" not in warnings:
+                warnings.append("price_cache_used")
+            unique_quarters = dict(self._price_cache)
             tariff = self._tariff()
             hours = aggregate_hourly(unique_quarters.values(), tariff, self.timezone)
             price_slots = price_intervals(unique_quarters.values(), tariff, self.timezone)
@@ -635,7 +720,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                     completed_slots = 0
                     if state.cycle_started_at is not None:
                         completed_slots = max(
-                            0,
+                            -1,
                             int(
                                 (floor_quarter.timestamp() - state.cycle_started_at.timestamp())
                                 // (15 * 60)
@@ -765,6 +850,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             for subentry in self.device_subentries:
                 data = subentry.data
                 state = self.states[subentry.subentry_id]
+                failure_wait_until: datetime | None = None
                 if (
                     state.override != OVERRIDE_AUTO
                     and state.override_until
@@ -793,6 +879,23 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                         else:
                             state.reason = "failure_keep"
                             continue
+                        current_active = state.cycle_active
+                        if current_active is None:
+                            current_active = self._observed_active(subentry)
+                        desired, failure_wait_until = protect_minimum_cycle(
+                            desired,
+                            current_active,
+                            state.cycle_started_at,
+                            now,
+                            int(data[CONF_MIN_ON_HOURS]),
+                            int(data[CONF_MIN_OFF_HOURS]),
+                        )
+                        if failure_wait_until is not None:
+                            reason = (
+                                "failure_wait_min_on"
+                                if current_active
+                                else "failure_wait_min_off"
+                            )
                         if not self.entry.data[CONF_SHADOW_MODE]:
                             state.locked_hour_start = self._grid_start(
                                 now, int(data.get(CONF_PLANNING_STEP_MINUTES, 60))
@@ -800,6 +903,8 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                             state.locked_active = desired
                 state.reason = "shadow_" + reason if self.entry.data[CONF_SHADOW_MODE] else reason
                 state.next_transition = self._next_transition(subentry.subentry_id, now)
+                if failure_wait_until is not None and reason.startswith("failure_wait_"):
+                    state.next_transition = failure_wait_until
                 if self.entry.data[CONF_SHADOW_MODE]:
                     continue
                 await self._async_set_target(subentry, bool(desired))
@@ -877,6 +982,13 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             "diagnostics": {
                 "grid_power": self._numeric_state(self.entry.data.get("grid_power_sensor")),
                 "pv_power": self._numeric_state(self.entry.data.get("pv_power_sensor")),
+                "price_cache_slots": len(self._price_cache),
+                "complete_price_days": sorted(self._complete_price_days),
+                "price_cache_updated_at": (
+                    self._price_cache_updated_at.isoformat()
+                    if self._price_cache_updated_at
+                    else None
+                ),
             },
             "hours": [
                 {

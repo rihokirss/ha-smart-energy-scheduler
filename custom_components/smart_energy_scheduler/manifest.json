@@ -9,5 +9,5 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/rihokirss/ha-smart-energy-scheduler/issues",
   "requirements": [],
-  "version": "0.8.11"
+  "version": "0.8.13"
 }

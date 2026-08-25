@@ -69,6 +69,19 @@ def parse_nordpool_response(payload: Any, area: str) -> list[QuarterPrice]:
     return sorted(unique.values(), key=lambda item: item.start)
 
 
+def is_complete_price_day(quarters: Sequence[QuarterPrice]) -> bool:
+    """Return whether a Nord Pool delivery day has every 15-minute interval."""
+    ordered = sorted(quarters, key=lambda item: item.start)
+    if len(ordered) not in (92, 96, 100):
+        return False
+    for index, quarter in enumerate(ordered):
+        if round((quarter.end - quarter.start).total_seconds()) != 15 * 60:
+            return False
+        if index and ordered[index - 1].end.timestamp() != quarter.start.timestamp():
+            return False
+    return True
+
+
 def is_day_tariff(moment: datetime, tariff: TariffConfig) -> bool:
     """Return whether a slot uses the day network tariff."""
     if tariff.weekend_night and (
@@ -335,6 +348,28 @@ def output_should_be_on(active: bool, inverted: bool) -> bool:
     return active != inverted
 
 
+def protect_minimum_cycle(
+    requested_active: bool,
+    current_active: bool | None,
+    cycle_started_at: datetime | None,
+    now: datetime,
+    min_on_hours: int,
+    min_off_hours: int,
+) -> tuple[bool, datetime | None]:
+    """Delay a fallback transition until the current ON/OFF cycle is safe."""
+    if (
+        current_active is None
+        or current_active == requested_active
+        or cycle_started_at is None
+    ):
+        return requested_active, None
+    minimum_hours = min_on_hours if current_active else min_off_hours
+    safe_at = cycle_started_at + timedelta(hours=max(0, minimum_hours))
+    if now.timestamp() >= safe_at.timestamp():
+        return requested_active, None
+    return current_active, safe_at
+
+
 def _effective_cost(
     hour: HourPrice, power_w: float, remaining_solar_wh: float
 ) -> tuple[float, float]:
@@ -366,7 +401,7 @@ def _optimize_binary_sequence(
     initial_active, initial_run = initial_state or (False, min_off_slots)
     initial_cap = min_on_slots if initial_active else min_off_slots
     states: dict[tuple[tuple[int, ...], bool, int], tuple[float, tuple[bool, ...]]] = {
-        ((0,) * len(days), initial_active, min(initial_cap, max(0, initial_run))): (0.0, ())
+        ((0,) * len(days), initial_active, min(initial_cap, max(-1, initial_run))): (0.0, ())
     }
     for idx, hour in enumerate(hours):
         if idx and hour.start.date() != hours[idx - 1].start.date():
@@ -503,10 +538,10 @@ def build_plans(
                     for left, right in zip(block, block[1:], strict=False)
                 ):
                     continue
-                block_cost = (
-                    sum(priced[index + offset][0] for offset in range(min_on_slots)) / min_on_slots
-                )
-                if block_cost <= device.always_on_below_eur_mwh:
+                if all(
+                    priced[index + offset][0] <= device.always_on_below_eur_mwh
+                    for offset in range(min_on_slots)
+                ):
                     for slot in block:
                         always_on_forced[slot.start.timestamp()] = True
         for day, requested in device_targets.items():
@@ -532,11 +567,12 @@ def build_plans(
                 len(available_indices), max(safety_minimum, always_on_count)
             )
             adjusted_targets[day] = min(len(available_indices), max(target, always_on_count))
+        locked_forced = dict((forced_states or {}).get(device.device_id, {}))
         device_forced = dict(maximum_price_forced)
         device_forced.update(always_on_forced)
         # A locked current hour represents an already-started cycle and wins over
         # a newly calculated price threshold until the next whole hour.
-        device_forced.update((forced_states or {}).get(device.device_id, {}))
+        device_forced.update(locked_forced)
         sequence = _optimize_binary_sequence(
             hours,
             optimizer_costs,
@@ -562,7 +598,7 @@ def build_plans(
             # The daily safety minimum, an explicit always-ON threshold, or an
             # already-started cycle may override the maximum price.
             device_forced = dict(always_on_forced)
-            device_forced.update((forced_states or {}).get(device.device_id, {}))
+            device_forced.update(locked_forced)
             sequence = _optimize_binary_sequence(
                 hours,
                 optimizer_costs,
@@ -571,8 +607,10 @@ def build_plans(
                 device_forced,
                 (initial_states or {}).get(device.device_id),
             )
-        if sequence is None and (always_on_forced or maximum_price_forced):
-            # A forced cheap hour can require adjacent runtime to satisfy the
+        if sequence is None and (
+            always_on_forced or maximum_price_forced or locked_forced
+        ):
+            # A forced cheap slot can require adjacent runtime to satisfy the
             # device's minimum ON period. The same applies when a daily safety
             # minimum cannot be represented by a shorter valid cycle.
             available_by_day = {

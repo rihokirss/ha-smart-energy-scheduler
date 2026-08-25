@@ -13,6 +13,7 @@ from custom_components.smart_energy_scheduler.engine import (
     build_plans,
     distribute_hour_energy,
     forecast_window_average,
+    is_complete_price_day,
     is_day_tariff,
     is_estonian_public_holiday,
     legacy_wind_chill,
@@ -21,6 +22,7 @@ from custom_components.smart_energy_scheduler.engine import (
     output_should_be_on,
     parse_nordpool_response,
     price_intervals,
+    protect_minimum_cycle,
     weather_target_hours,
 )
 from custom_components.smart_energy_scheduler.models import (
@@ -84,6 +86,27 @@ def test_parse_nordpool_multi_area_response() -> None:
     result = parse_nordpool_response(payload, "EE")
     assert len(result) == 1
     assert result[0].market_eur_mwh == 42.5
+
+
+def test_complete_price_day_accepts_normal_and_dst_slot_counts() -> None:
+    start = datetime(2026, 8, 20, tzinfo=UTC)
+
+    assert is_complete_price_day(quarter_series(start, 96))
+    assert is_complete_price_day(quarter_series(start, 92))
+    assert is_complete_price_day(quarter_series(start, 100))
+
+
+def test_complete_price_day_rejects_partial_or_gapped_response() -> None:
+    start = datetime(2026, 8, 20, tzinfo=UTC)
+    gapped = quarter_series(start, 96)
+    gapped[40] = QuarterPrice(
+        gapped[40].start + timedelta(minutes=15),
+        gapped[40].end + timedelta(minutes=15),
+        gapped[40].market_eur_mwh,
+    )
+
+    assert not is_complete_price_day(quarter_series(start, 95))
+    assert not is_complete_price_day(gapped)
 
 
 def test_parse_nordpool_missing_day_response_is_empty() -> None:
@@ -320,6 +343,72 @@ def test_current_hour_can_be_locked_across_recalculation() -> None:
     assert [slot.active for slot in plan.hours] == [True, False, False]
 
 
+def test_locked_quarter_expands_completed_daily_target_to_minimum_run() -> None:
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    slots = [
+        HourPrice(
+            start + timedelta(minutes=15 * i),
+            start + timedelta(minutes=15 * (i + 1)),
+            100,
+            100,
+            100,
+        )
+        for i in range(8)
+    ]
+    device = PlanningDevice(
+        "load", "Load", 1000, time(), time(), 1, 1, 1, planning_step_minutes=15
+    )
+
+    plan = build_plans(
+        slots,
+        [device],
+        {"load": {start.date(): 0}},
+        forced_states={"load": {start.timestamp(): True}},
+    )["load"]
+
+    assert plan.valid
+    assert plan.target_hours[start.date()] == 1
+    assert [slot.active for slot in plan.hours] == [True, True, True, True, False, False, False, False]
+
+
+def test_mid_slot_cycle_start_does_not_credit_a_full_quarter() -> None:
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    slots = [
+        HourPrice(
+            start + timedelta(minutes=15 * i),
+            start + timedelta(minutes=15 * (i + 1)),
+            100,
+            100,
+            100,
+        )
+        for i in range(8)
+    ]
+    device = PlanningDevice(
+        "load", "Load", 1000, time(), time(), 1, 1, 1, planning_step_minutes=15
+    )
+
+    plan = build_plans(
+        slots,
+        [device],
+        {"load": {start.date(): 0}},
+        forced_states={"load": {start.timestamp(): True}},
+        initial_states={"load": (True, -1)},
+    )["load"]
+
+    assert plan.valid
+    assert plan.target_hours[start.date()] == 1.25
+    assert [slot.active for slot in plan.hours] == [
+        True,
+        True,
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
+
+
 def test_device_always_on_price_expands_daily_target() -> None:
     start = datetime(2026, 8, 20, tzinfo=TALLINN)
     hours = [
@@ -364,6 +453,50 @@ def test_always_on_price_expands_run_to_device_minimum() -> None:
     assert plan.valid
     assert plan.target_hours[start.date()] == 2
     assert plan.hours[1].active
+
+
+def test_always_on_threshold_checks_every_slot_in_minimum_block() -> None:
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    hours = [
+        HourPrice(
+            start + timedelta(hours=i),
+            start + timedelta(hours=i + 1),
+            price,
+            price,
+            price,
+        )
+        for i, price in enumerate((40, 40, 60, 60))
+    ]
+    device = PlanningDevice(
+        "load", "Load", 1000, time(), time(), 2, 1, 1, always_on_below_eur_mwh=50
+    )
+    plan = build_plans(hours, [device], {"load": {start.date(): 1}})["load"]
+
+    assert plan.valid
+    assert plan.target_hours[start.date()] == 2
+    assert [slot.active for slot in plan.hours] == [True, True, False, False]
+
+
+def test_isolated_cheap_slot_does_not_create_expensive_minimum_run() -> None:
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    hours = [
+        HourPrice(
+            start + timedelta(hours=i),
+            start + timedelta(hours=i + 1),
+            price,
+            price,
+            price,
+        )
+        for i, price in enumerate((60, 40, 60))
+    ]
+    device = PlanningDevice(
+        "load", "Load", 1000, time(), time(), 2, 1, 1, always_on_below_eur_mwh=50
+    )
+    plan = build_plans(hours, [device], {"load": {start.date(): 0}})["load"]
+
+    assert plan.valid
+    assert plan.target_hours[start.date()] == 0
+    assert not any(slot.active for slot in plan.hours)
 
 
 def test_device_always_off_price_caps_weather_target() -> None:
@@ -473,6 +606,65 @@ def test_quarter_hour_device_selects_cheapest_rolling_hour() -> None:
     assert active == [start + timedelta(minutes=15 * i) for i in range(1, 5)]
 
 
+def test_optimizer_keeps_costly_quarter_between_cheaper_blocks() -> None:
+    """A short costly bridge can be cheaper than enforcing a separate cycle."""
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    prices = (1, 1, 1, 1, 80, 1, 1, 1, 1, 500, 500, 500)
+    slots = [
+        HourPrice(
+            start + timedelta(minutes=15 * i),
+            start + timedelta(minutes=15 * (i + 1)),
+            price,
+            price,
+            price,
+        )
+        for i, price in enumerate(prices)
+    ]
+    device = PlanningDevice(
+        "load", "Load", 1000, time(), time(), 1, 1, 1, planning_step_minutes=15
+    )
+
+    plan = build_plans(slots, [device], {"load": {start.date(): 2}})["load"]
+
+    assert plan.valid
+    assert plan.hours[4].active
+    assert [index for index, slot in enumerate(plan.hours) if slot.active] == list(range(1, 9))
+
+
+def test_forced_cheap_blocks_expand_target_to_bridge_short_off_gap() -> None:
+    """Forced cheap runs remain one safe cycle when the OFF gap is too short."""
+    start = datetime(2026, 8, 20, tzinfo=TALLINN)
+    prices = (10, 10, 10, 10, 80, 10, 10, 10, 10)
+    slots = [
+        HourPrice(
+            start + timedelta(minutes=15 * i),
+            start + timedelta(minutes=15 * (i + 1)),
+            price,
+            price,
+            price,
+        )
+        for i, price in enumerate(prices)
+    ]
+    device = PlanningDevice(
+        "load",
+        "Load",
+        1000,
+        time(),
+        time(),
+        1,
+        1,
+        1,
+        planning_step_minutes=15,
+        always_on_below_eur_mwh=50,
+    )
+
+    plan = build_plans(slots, [device], {"load": {start.date(): 0}})["load"]
+
+    assert plan.valid
+    assert plan.target_hours[start.date()] == 2.25
+    assert all(slot.active for slot in plan.hours)
+
+
 def test_hour_grid_device_cannot_start_on_quarter_hour() -> None:
     start = datetime(2026, 8, 20, tzinfo=TALLINN)
     prices = (100, 1, 1, 1, 1, 100, 100, 100)
@@ -563,3 +755,35 @@ def test_quarter_hour_initial_run_is_not_restarted_on_recalculation() -> None:
 )
 def test_explicit_output_mapping(active: bool, inverted: bool, physical_on: bool) -> None:
     assert output_should_be_on(active, inverted) is physical_on
+
+
+def test_failure_transition_respects_minimum_off_time() -> None:
+    now = datetime(2026, 8, 20, 3, tzinfo=TALLINN)
+
+    desired, safe_at = protect_minimum_cycle(
+        True,
+        False,
+        now - timedelta(minutes=45),
+        now,
+        min_on_hours=1,
+        min_off_hours=1,
+    )
+
+    assert desired is False
+    assert safe_at == now + timedelta(minutes=15)
+
+
+def test_failure_transition_is_allowed_after_minimum_cycle() -> None:
+    now = datetime(2026, 8, 20, 3, 15, tzinfo=TALLINN)
+
+    desired, safe_at = protect_minimum_cycle(
+        True,
+        False,
+        now - timedelta(hours=1),
+        now,
+        min_on_hours=1,
+        min_off_hours=1,
+    )
+
+    assert desired is True
+    assert safe_at is None
