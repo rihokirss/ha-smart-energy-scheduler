@@ -29,8 +29,8 @@ set_override:
         select:
           options:
             - auto
-            - on
-            - off
+            - "on"
+            - "off"
     until:
       name: End time
       description: Required for a timed override; ignored in Auto mode.

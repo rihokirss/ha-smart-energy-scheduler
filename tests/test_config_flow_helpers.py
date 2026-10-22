@@ -116,7 +116,7 @@ def test_section_order_and_initial_collapsed_state() -> None:
     }
 
 
-def test_translations_and_icons_cover_every_section_and_field() -> None:
+def test_translations_cover_every_section_and_field() -> None:
     for relative_path in ("strings.json", "translations/en.json", "translations/et.json"):
         content = json.loads((INTEGRATION_DIR / relative_path).read_text())
         steps = content["config_subentries"]["device"]["step"]
@@ -125,8 +125,3 @@ def test_translations_and_icons_cover_every_section_and_field() -> None:
             assert tuple(sections) == DEVICE_SECTIONS
             for section_key, expected_fields in SECTION_FIELDS.items():
                 assert set(sections[section_key]["data"]) == expected_fields
-
-    icons = json.loads((INTEGRATION_DIR / "icons.json").read_text())
-    icon_steps = icons["config_subentries"]["device"]["step"]
-    for step_name in ("user", "reconfigure"):
-        assert tuple(icon_steps[step_name]["sections"]) == DEVICE_SECTIONS

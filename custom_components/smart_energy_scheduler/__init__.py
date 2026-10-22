@@ -42,6 +42,8 @@ from .websocket import async_register as async_register_websocket
 
 type SmartEnergyConfigEntry = ConfigEntry[SmartEnergyCoordinator]
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 OVERRIDE_SCHEMA = vol.Schema(
     {
         vol.Required("device_id"): cv.string,

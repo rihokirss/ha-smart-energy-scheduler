@@ -339,7 +339,7 @@ generated override select instead of calling the service directly.
 
 For HACS installations, update from HACS and restart Home Assistant. For manual
 installations, replace the complete integration directory and restart Home Assistant. Do
-not copy only selected Python files because translations, icons, and the bundled frontend
+not copy only selected Python files because translations and the bundled frontend
 may change together.
 
 ## Development

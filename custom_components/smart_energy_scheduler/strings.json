@@ -79,7 +79,6 @@
   },
   "config_subentries": {
     "device": {
-      "title": "Scheduled device",
       "entry_type": "Controlled device",
       "initiate_flow": {
         "user": "Add controlled device",

@@ -79,7 +79,6 @@
   },
   "config_subentries": {
     "device": {
-      "title": "Juhitav seade",
       "entry_type": "Juhitav seade",
       "initiate_flow": {
         "user": "Lisa juhitav seade",
