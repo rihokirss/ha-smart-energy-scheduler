@@ -1,5 +1,7 @@
 # Smart Energy Scheduler Home Assistantile
 
+<img src="custom_components/smart_energy_scheduler/brand/icon.png" alt="Smart Energy Scheduler: välguga maja" width="96" height="96">
+
 [![Validate](https://github.com/rihokirss/ha-smart-energy-scheduler/actions/workflows/validate.yml/badge.svg)](https://github.com/rihokirss/ha-smart-energy-scheduler/actions/workflows/validate.yml)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
 [![Home Assistant 2026.8+](https://img.shields.io/badge/Home%20Assistant-2026.8%2B-18BCF2.svg)](https://www.home-assistant.io/)

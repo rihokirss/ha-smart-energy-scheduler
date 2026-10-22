@@ -1,0 +1,8 @@
+Smart Energy Scheduler uses the home-lightning-bolt icon from Material Design Icons
+by Pictogrammers (https://pictogrammers.com/library/mdi/icon/home-lightning-bolt/).
+Source: https://github.com/Templarian/MaterialDesign/blob/master/svg/home-lightning-bolt.svg
+License: Apache License 2.0; see LICENSE-2.0.txt in this directory.
+
+The original SVG path is unchanged. The PNG variants use blue (#03A9F4), a
+transparent background, and a square viewBox cropped to the artwork width.
+icon.png is 256 x 256; icon@2x.png is 512 x 512.
