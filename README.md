@@ -4,6 +4,8 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
 [![Home Assistant 2026.8+](https://img.shields.io/badge/Home%20Assistant-2026.8%2B-18BCF2.svg)](https://www.home-assistant.io/)
 
+🇪🇪 **Eesti keeles:** [paigaldusjuhend](#paigaldusjuhend-eesti-keeles)
+
 Smart Energy Scheduler is a custom Home Assistant integration that schedules heat pumps,
 water heaters, EV charging permits, and other switch-like loads when electricity is most
 favorable.
@@ -41,34 +43,104 @@ can be monitored or overridden from the generated entities or the bundled Lovela
 | Requirement | Purpose |
 | --- | --- |
 | Home Assistant 2026.8.0 or newer | Config subentries and the current data-entry-flow APIs |
-| A Nord Pool integration providing `nordpool.hourly` | Day-Ahead market prices |
+| [HACS](https://hacs.xyz/) (recommended) | Installing and updating this integration |
+| The [Nord Pool custom integration](https://github.com/custom-components/nordpool) | Day-Ahead market prices through its `nordpool.hourly` action |
 | A `switch`, `input_boolean`, or `light` target | The controlled load or its run permit |
 | An hourly `weather` entity (optional) | Weather-compensated runtime |
 | Forecast.Solar configured in the Energy Dashboard (optional) | PV production forecast |
 
-The integration currently expects the Nord Pool service response to contain quarter-hour
+The built-in Home Assistant Nord Pool integration does not provide `nordpool.hourly`; install
+the custom integration as described below. The integration currently expects the Nord Pool
+service response to contain quarter-hour
 price intervals. Tomorrow's prices are optional until the provider has published a complete
 local day.
 
 ## Installation
 
-### HACS custom repository
+### 1. Install the Nord Pool custom integration
 
-Until the repository is included in the HACS default catalog:
+Prices are read through the `nordpool.hourly` action of the
+[Nord Pool custom integration](https://github.com/custom-components/nordpool). Skip this step
+if **Settings → Tools → Actions** already lists `nordpool.hourly`.
 
-1. Open **HACS → Integrations**.
-2. Open the three-dot menu and choose **Custom repositories**.
-3. Add `https://github.com/rihokirss/ha-smart-energy-scheduler` with category
-   **Integration**.
-4. Search for **Smart Energy Scheduler** and install it.
-5. Restart Home Assistant.
+[![Open the Nord Pool repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=custom-components&repository=nordpool&category=integration)
 
-### Manual installation
+1. Install [HACS](https://hacs.xyz/docs/use/) if it is not installed yet.
+2. In HACS, search for **Nord Pool**, open it, and select **Download**.
+3. Restart Home Assistant (**Settings → System → ⏻ → Restart Home Assistant**).
+4. Open **Settings → Devices & services → Add integration**, choose **Nord Pool**, and select
+   your price area (for example `EE`) and currency.
+5. Confirm that `nordpool.hourly` appears under **Settings → Tools → Actions**.
+
+> [!NOTE]
+> The custom integration uses the same `nordpool` domain as the built-in Nord Pool
+> integration and replaces it. Existing built-in Nord Pool entries must be re-created with the
+> custom integration.
+
+### 2. Add this repository to HACS
+
+The repository is not in the HACS default catalog yet, so add it as a custom repository.
+The button below opens the dialog directly:
+
+[![Open Smart Energy Scheduler in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rihokirss&repository=ha-smart-energy-scheduler&category=integration)
+
+Or add it by hand:
+
+1. Open **HACS** from the sidebar.
+2. Open the three-dot menu in the top-right corner and choose **Custom repositories**.
+3. Enter `https://github.com/rihokirss/ha-smart-energy-scheduler` as **Repository**, choose
+   **Integration** as **Type**, and select **Add**.
+4. Close the dialog.
+
+### 3. Download and restart
+
+1. In HACS, search for **Smart Energy Scheduler** and open it.
+2. Select **Download** in the bottom-right corner and confirm.
+3. Restart Home Assistant.
+
+### 4. Add the integration
+
+[![Start setting up Smart Energy Scheduler.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=smart_energy_scheduler)
+
+Or open **Settings → Devices & services → Add integration** and search for
+**Smart Energy Scheduler**. In the form:
+
+1. Check the Nord Pool area, margins, VAT, and network fees. All prices are in `EUR/MWh`
+   (`1 cent/kWh = 10 EUR/MWh`).
+2. Select an hourly weather entity if heating loads should follow the forecast.
+3. Leave **shadow mode** enabled.
+4. Enable **I have verified these tariff values** and submit.
+
+### 5. Configure the controlled device
+
+Setup creates one example device named **Soojuspump**. On the integration page
+(**Settings → Devices & services → Smart Energy Scheduler**):
+
+1. On the **Soojuspump** row, choose **Configure device**.
+2. Select your own target `switch`, `input_boolean`, or `light` and review every section.
+3. Use **Add controlled device** for additional loads such as a water heater.
+
+### 6. Add the Lovelace cards (optional)
+
+1. Open **Settings → Dashboards**, then the three-dot menu in the top-right corner →
+   **Resources**.
+2. Select **Add resource**, enter `/smart_energy_scheduler/smart-energy-scheduler-card.js`,
+   choose **JavaScript module**, and create it.
+3. Hard-refresh the browser, edit a dashboard, add a **Manual** card, and paste one of the
+   examples from [Lovelace cards](#lovelace-cards).
+
+### 7. Verify in shadow mode, then go live
+
+Watch the plan for at least two days (see [Safety and output behavior](#safety-and-output-behavior)).
+When it looks right, choose **Reconfigure** from the integration's three-dot menu and disable
+**shadow mode**.
+
+### Manual installation without HACS
 
 1. Download or clone this repository.
 2. Copy `custom_components/smart_energy_scheduler` to
    `<config>/custom_components/smart_energy_scheduler` on the Home Assistant host.
-3. Restart Home Assistant.
+3. Restart Home Assistant and continue from [step 4](#4-add-the-integration).
 
 The final directory should contain at least:
 
@@ -83,22 +155,14 @@ The final directory should contain at least:
 └── frontend/
 ```
 
-## Initial setup
-
-1. Open **Settings → Devices & services → Add integration**.
-2. Search for **Smart Energy Scheduler**.
-3. Review the imported tariff defaults and confirm that they match your contract.
-4. Select an hourly weather entity if weather compensation will be used.
-5. Leave **shadow mode** enabled.
-6. Finish the setup, open the generated device row, and choose **Configure device**.
-7. Select the correct target and review every device section before enabling control.
+## Configuration
 
 Only one scheduler config entry is supported. Additional controlled loads are created as
 config subentries from **Add controlled device** on the integration page.
 
 ### Shared settings
 
-The integration-level **Configure** action contains settings shared by every load:
+The integration-level **Reconfigure** action contains settings shared by every load:
 
 - Nord Pool area and currency;
 - purchase and sale margins;
@@ -310,7 +374,7 @@ generated override select instead of calling the service directly.
 
 ### The plan is unavailable
 
-- Confirm that `nordpool.hourly` exists under **Developer tools → Actions**.
+- Confirm that `nordpool.hourly` exists under **Settings → Tools → Actions**.
 - Call `smart_energy_scheduler.recalculate` and inspect the integration log.
 - A partial next day is normal; unavailable current-day prices are not.
 - Check the device's **Control reason** sensor and the warnings shown on the cards.
@@ -367,6 +431,41 @@ explicit migration.
 This project is under active development. Treat it as pre-release automation software and
 validate every plan in shadow mode before allowing it to control equipment. Bug reports and
 focused pull requests are welcome through the GitHub issue tracker.
+
+## Paigaldusjuhend (eesti keeles)
+
+Menüüde nimed on toodud nii, nagu need on Home Assistanti ingliskeelses ja (sulgudes)
+eestikeelses kasutajaliideses.
+
+1. **Paigalda Nord Pooli integratsioon.** Paigalda [HACS](https://hacs.xyz/docs/use/), kui
+   seda veel pole. Otsi HACS-ist **Nord Pool**
+   ([custom-components/nordpool](https://github.com/custom-components/nordpool)), vali
+   **Download** ja taaskäivita Home Assistant. Seejärel lisa see menüüst **Settings → Devices &
+   services → Add integration** (*Seaded → Seadmed ja teenused → Lisa sidumine*) ja vali
+   hinnapiirkond `EE`. Kontrolli, et **Settings → Tools → Actions** (*Seaded → Tööriistad →
+   Toimingud*) all on olemas `nordpool.hourly`. HA sisseehitatud Nord Pooli integratsioon ei
+   sobi, sest sellel see teenus puudub.
+2. **Lisa see repo HACS-i.** Vajuta ülal olevat nuppu *Open Smart Energy Scheduler in HACS*
+   või ava HACS ja vali paremal üleval kolme punkti menüüst **Custom repositories**. Sisesta
+   `https://github.com/rihokirss/ha-smart-energy-scheduler`, tüübiks vali **Integration** ja
+   vajuta **Add**.
+3. **Laadi alla.** Otsi HACS-ist **Smart Energy Scheduler**, vali **Download** ja taaskäivita
+   Home Assistant.
+4. **Lisa integratsioon.** **Settings → Devices & services → Add integration** (*Seaded →
+   Seadmed ja teenused → Lisa sidumine*) → **Smart Energy Scheduler**. Kontrolli marginaale,
+   käibemaksu ja võrgutasusid (ühikud on `EUR/MWh`, `1 s/kWh = 10 EUR/MWh`), vali soovi korral
+   ilmaprognoosi olem, jäta **varirežiim** sisse ja kinnita tariifid.
+5. **Seadista seade.** Integratsiooni lehel on näidisseade **Soojuspump**. Vali selle realt
+   **Configure device** (*Seadista seade*) ning määra oma lüliti ja tööajad. Lisaseadmed lisa
+   nupuga **Add controlled device** (*Lisa juhitav seade*).
+6. **Lisa kaardid (valikuline).** **Settings → Dashboards** (*Seaded → Vaated*) → paremal
+   üleval kolme punkti menüüst **Resources** (*Ressursid*) → **Add resource** (*Lisa uus
+   ressurss*). URL on `/smart_energy_scheduler/smart-energy-scheduler-card.js` ja tüüp
+   **JavaScript module** (*JavaScripti moodul*). Seejärel lisa töölauale **Manual** kaart,
+   näiteks sisuga `type: custom:smart-energy-scheduler-card`.
+7. **Testi ja lülita sisse.** Jälgi plaani vähemalt paar päeva varirežiimis. Kui plaan on
+   mõistlik, vali integratsiooni kolme punkti menüüst **Reconfigure** (*Seadista uuesti*) ja
+   lülita varirežiim välja.
 
 ## License
 
