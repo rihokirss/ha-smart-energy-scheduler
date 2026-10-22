@@ -115,11 +115,14 @@ Or open **Settings → Devices & services → Add integration** and search for
 
 ### 5. Configure the controlled device
 
-Setup creates one example device named **Soojuspump**. On the integration page
+Setup creates a sample heat-pump configuration named **Soojuspump** (Estonian for
+“heat pump”). This is a starting point: you can rename it and adapt its settings to any
+supported load. On the integration page
 (**Settings → Devices & services → Smart Energy Scheduler**):
 
 1. On the **Soojuspump** row, choose **Configure device**.
-2. Select your own target `switch`, `input_boolean`, or `light` and review every section.
+2. Give the device a name, select your own target `switch`, `input_boolean`, or `light`,
+   and adjust the sample runtime, power, and weather settings to suit your device.
 3. Use **Add controlled device** for additional loads such as a water heater.
 
 ### 6. Add the Lovelace cards (optional)
@@ -326,6 +329,9 @@ This card displays market prices, PV production, every device plan, shadow/live 
 two-hour ON/OFF overrides.
 
 ### Price and activity chart
+
+The per-device examples below use a heat pump with the target `switch.heat_pump`.
+Replace it with the target entity selected in [step 5](#5-configure-the-controlled-device).
 
 ```yaml
 type: custom:smart-energy-price-plan-card
