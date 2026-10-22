@@ -4,7 +4,7 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
 [![Home Assistant 2026.8+](https://img.shields.io/badge/Home%20Assistant-2026.8%2B-18BCF2.svg)](https://www.home-assistant.io/)
 
-🇪🇪 **Eesti keeles:** [paigaldusjuhend](#paigaldusjuhend-eesti-keeles)
+🇪🇪 **Eesti keeles:** [README.et.md](README.et.md)
 
 Smart Energy Scheduler is a custom Home Assistant integration that schedules heat pumps,
 water heaters, EV charging permits, and other switch-like loads when electricity is most
@@ -310,7 +310,7 @@ The integration serves its bundled JavaScript at:
 ```
 
 Add that URL under **Settings → Dashboards → Resources** as a **JavaScript module**. Then
-add one or more manual cards.
+add one or more manual cards. The card texts are currently in Estonian.
 
 ### Complete multi-device plan
 
@@ -431,41 +431,6 @@ explicit migration.
 This project is under active development. Treat it as pre-release automation software and
 validate every plan in shadow mode before allowing it to control equipment. Bug reports and
 focused pull requests are welcome through the GitHub issue tracker.
-
-## Paigaldusjuhend (eesti keeles)
-
-Menüüde nimed on toodud nii, nagu need on Home Assistanti ingliskeelses ja (sulgudes)
-eestikeelses kasutajaliideses.
-
-1. **Paigalda Nord Pooli integratsioon.** Paigalda [HACS](https://hacs.xyz/docs/use/), kui
-   seda veel pole. Otsi HACS-ist **Nord Pool**
-   ([custom-components/nordpool](https://github.com/custom-components/nordpool)), vali
-   **Download** ja taaskäivita Home Assistant. Seejärel lisa see menüüst **Settings → Devices &
-   services → Add integration** (*Seaded → Seadmed ja teenused → Lisa sidumine*) ja vali
-   hinnapiirkond `EE`. Kontrolli, et **Settings → Tools → Actions** (*Seaded → Tööriistad →
-   Toimingud*) all on olemas `nordpool.hourly`. HA sisseehitatud Nord Pooli integratsioon ei
-   sobi, sest sellel see teenus puudub.
-2. **Lisa see repo HACS-i.** Vajuta ülal olevat nuppu *Open Smart Energy Scheduler in HACS*
-   või ava HACS ja vali paremal üleval kolme punkti menüüst **Custom repositories**. Sisesta
-   `https://github.com/rihokirss/ha-smart-energy-scheduler`, tüübiks vali **Integration** ja
-   vajuta **Add**.
-3. **Laadi alla.** Otsi HACS-ist **Smart Energy Scheduler**, vali **Download** ja taaskäivita
-   Home Assistant.
-4. **Lisa integratsioon.** **Settings → Devices & services → Add integration** (*Seaded →
-   Seadmed ja teenused → Lisa sidumine*) → **Smart Energy Scheduler**. Kontrolli marginaale,
-   käibemaksu ja võrgutasusid (ühikud on `EUR/MWh`, `1 s/kWh = 10 EUR/MWh`), vali soovi korral
-   ilmaprognoosi olem, jäta **varirežiim** sisse ja kinnita tariifid.
-5. **Seadista seade.** Integratsiooni lehel on näidisseade **Soojuspump**. Vali selle realt
-   **Configure device** (*Seadista seade*) ning määra oma lüliti ja tööajad. Lisaseadmed lisa
-   nupuga **Add controlled device** (*Lisa juhitav seade*).
-6. **Lisa kaardid (valikuline).** **Settings → Dashboards** (*Seaded → Vaated*) → paremal
-   üleval kolme punkti menüüst **Resources** (*Ressursid*) → **Add resource** (*Lisa uus
-   ressurss*). URL on `/smart_energy_scheduler/smart-energy-scheduler-card.js` ja tüüp
-   **JavaScript module** (*JavaScripti moodul*). Seejärel lisa töölauale **Manual** kaart,
-   näiteks sisuga `type: custom:smart-energy-scheduler-card`.
-7. **Testi ja lülita sisse.** Jälgi plaani vähemalt paar päeva varirežiimis. Kui plaan on
-   mõistlik, vali integratsiooni kolme punkti menüüst **Reconfigure** (*Seadista uuesti*) ja
-   lülita varirežiim välja.
 
 ## License
 
