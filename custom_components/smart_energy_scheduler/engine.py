@@ -586,6 +586,8 @@ def build_plans(
             )
             adjusted_targets[day] = min(len(available_indices), max(target, always_on_count))
         locked_forced = dict((forced_states or {}).get(device.device_id, {}))
+        initial_state = (initial_states or {}).get(device.device_id)
+        running_cycle = initial_state is not None and initial_state[0]
         device_forced = dict(maximum_price_forced)
         device_forced.update(always_on_forced)
         # A locked current hour represents an already-started cycle and wins over
@@ -597,7 +599,7 @@ def build_plans(
             adjusted_targets,
             device,
             device_forced,
-            (initial_states or {}).get(device.device_id),
+            initial_state,
         )
         if sequence is None and maximum_price_forced:
             # Weather demand is discretionary above the configured maximum
@@ -610,7 +612,7 @@ def build_plans(
                 adjusted_targets,
                 device,
                 device_forced,
-                (initial_states or {}).get(device.device_id),
+                initial_state,
             )
         if sequence is None and maximum_price_forced:
             # The daily safety minimum, an explicit always-ON threshold, or an
@@ -623,14 +625,15 @@ def build_plans(
                 adjusted_targets,
                 device,
                 device_forced,
-                (initial_states or {}).get(device.device_id),
+                initial_state,
             )
         if sequence is None and (
-            always_on_forced or maximum_price_forced or locked_forced
+            always_on_forced or maximum_price_forced or locked_forced or running_cycle
         ):
             # A forced cheap slot can require adjacent runtime to satisfy the
             # device's minimum ON period. The same applies when a daily safety
-            # minimum cannot be represented by a shorter valid cycle.
+            # minimum cannot be represented by a shorter valid cycle, or when a
+            # running cycle must finish its minimum ON time after the target is met.
             available_by_day = {
                 day: sum(
                     hour.start.date() == day
@@ -658,7 +661,7 @@ def build_plans(
                         expanded,
                         device,
                         device_forced,
-                        (initial_states or {}).get(device.device_id),
+                        initial_state,
                     )
                     if sequence is not None:
                         adjusted_targets = expanded

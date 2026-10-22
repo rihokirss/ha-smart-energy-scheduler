@@ -785,6 +785,32 @@ def test_quarter_hour_initial_run_is_not_restarted_on_recalculation() -> None:
     assert [slot.active for slot in plan.hours] == [True, True, False, False]
 
 
+def test_running_cycle_finishes_minimum_on_after_daily_target_is_met() -> None:
+    start = datetime(2026, 10, 22, 21, 15, tzinfo=TALLINN)
+    slots = [
+        HourPrice(
+            start + timedelta(minutes=15 * i),
+            start + timedelta(minutes=15 * (i + 1)),
+            100,
+            100,
+            100,
+        )
+        for i in range(11)
+    ]
+    device = PlanningDevice("load", "Load", 1000, time(), time(), 1, 1, 1, planning_step_minutes=15)
+
+    plan = build_plans(
+        slots,
+        [device],
+        {"load": {start.date(): 0}},
+        initial_states={"load": (True, 3)},
+    )["load"]
+
+    assert plan.valid
+    assert plan.target_hours[start.date()] == 0.25
+    assert [slot.active for slot in plan.hours] == [True] + [False] * 10
+
+
 @pytest.mark.parametrize(
     ("active", "inverted", "physical_on"),
     [(True, False, True), (False, False, False), (True, True, False), (False, True, True)],

@@ -856,7 +856,9 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                             + (segment_end - cursor).total_seconds() / 3600
                         )
                         cursor = segment_end
-            if active is not None and active != state.last_active:
+            # Compare with the persisted cycle: a source that is briefly unavailable,
+            # for example while Home Assistant starts, has not started a new cycle.
+            if active is not None and active != state.cycle_active:
                 state.cycle_started_at = now
                 state.cycle_active = active
             state.last_active = active
