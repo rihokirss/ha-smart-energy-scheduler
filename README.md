@@ -367,3 +367,7 @@ explicit migration.
 This project is under active development. Treat it as pre-release automation software and
 validate every plan in shadow mode before allowing it to control equipment. Bug reports and
 focused pull requests are welcome through the GitHub issue tracker.
+
+## License
+
+Released under the [MIT License](LICENSE).
