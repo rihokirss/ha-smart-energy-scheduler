@@ -170,3 +170,14 @@ def test_heating_curve_card_is_editable_and_shows_forecast_points() -> None:
     assert "15 min lubab algusi :00/:15/:30/:45" in source
     assert 'data-enable="${key}"' in source
     assert "Päeva miinimumtunnid võivad" in source
+
+
+def test_plan_cards_show_winter_badge_while_pv_is_ignored() -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "custom_components/smart_energy_scheduler/frontend/smart-energy-scheduler-card.js"
+    ).read_text()
+    assert "_winterBadge()" in source
+    assert "winter?.active" in source
+    assert "TALVEREŽIIM" in source
+    assert source.count('<div class="badges">${this._winterBadge()}') == 2

@@ -1004,6 +1004,7 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
         data = data or self.data
         if data is None:
             return {"entry_id": self.entry.entry_id, "ready": False}
+        winter_season = self._solar_winter_season()
         return {
             "entry_id": self.entry.entry_id,
             "generated_at": data.generated_at.isoformat(),
@@ -1011,6 +1012,17 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             "error": data.error,
             "warnings": data.warnings,
             "solar_source": data.solar_source,
+            "solar_winter": (
+                {
+                    "start": list(winter_season[0]),
+                    "end": list(winter_season[1]),
+                    "active": day_in_season(
+                        dt_util.now().astimezone(self.timezone).date(), *winter_season
+                    ),
+                }
+                if winter_season is not None
+                else None
+            ),
             "temperatures": data.temperatures,
             "diagnostics": {
                 "grid_power": self._numeric_state(self.entry.data.get("grid_power_sensor")),

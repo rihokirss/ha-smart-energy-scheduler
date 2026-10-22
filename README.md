@@ -236,9 +236,9 @@ PV power sensor is diagnostic only; it is not used as a forecast source.
 The optional **winter period** ignores both forecast and fallback PV on every local day
 between the configured first and last month/day, inclusive. The range may wrap the new
 year, so `10/15` to `2/15` covers 15 October through 15 February. While the whole planning
-horizon is inside the winter period, the solar forecast is not requested at all and the
-cards show *PV talvel arvestamata*. The house base load and price-only planning are
-unchanged.
+horizon is inside the winter period, the solar forecast is not requested at all. While today
+is inside the period, the plan cards show a blue **TALVEREŽIIM** badge. The house base load
+and price-only planning are unchanged.
 
 ### Weather compensation
 
