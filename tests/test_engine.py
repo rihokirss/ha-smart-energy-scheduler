@@ -11,8 +11,10 @@ from custom_components.smart_energy_scheduler.engine import (
     aggregate_hourly,
     apply_solar_window_fallback,
     build_plans,
+    day_in_season,
     distribute_hour_energy,
     forecast_window_average,
+    ignore_solar_in_season,
     is_complete_price_day,
     is_day_tariff,
     is_estonian_public_holiday,
@@ -281,6 +283,40 @@ def test_solar_fallback_month_range_can_wrap_new_year() -> None:
     assert month_in_range(12, 10, 2)
     assert month_in_range(1, 10, 2)
     assert not month_in_range(6, 10, 2)
+
+
+def test_winter_season_wraps_new_year_inclusively() -> None:
+    start, end = (10, 15), (2, 15)
+    assert not day_in_season(date(2026, 10, 14), start, end)
+    assert day_in_season(date(2026, 10, 15), start, end)
+    assert day_in_season(date(2026, 12, 31), start, end)
+    assert day_in_season(date(2027, 1, 1), start, end)
+    assert day_in_season(date(2027, 2, 15), start, end)
+    assert not day_in_season(date(2027, 2, 16), start, end)
+    assert day_in_season(date(2026, 6, 10), (6, 1), (6, 30))
+    assert not day_in_season(date(2026, 7, 1), (6, 1), (6, 30))
+
+
+def test_winter_season_ignores_pv_only_on_season_days() -> None:
+    start = datetime(2026, 2, 15, 12, tzinfo=TALLINN)
+    hours = [
+        HourPrice(start, start + timedelta(hours=1), 50, 100, 45, pv_wh=3000, base_load_wh=500),
+        HourPrice(
+            start + timedelta(days=1),
+            start + timedelta(days=1, hours=1),
+            50,
+            100,
+            45,
+            pv_wh=3000,
+            base_load_wh=500,
+        ),
+    ]
+    ignored = ignore_solar_in_season(hours, (10, 15), (2, 15))
+    assert ignored == 1
+    assert hours[0].pv_wh == 0
+    assert hours[0].surplus_wh == 0
+    assert hours[0].base_load_wh == 500
+    assert hours[1].pv_wh == 3000
 
 
 def test_shared_pv_is_not_double_counted() -> None:

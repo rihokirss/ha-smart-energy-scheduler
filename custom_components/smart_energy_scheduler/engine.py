@@ -244,6 +244,24 @@ def month_in_range(month: int, start_month: int, end_month: int) -> bool:
     return start <= month <= end if start <= end else month >= start or month <= end
 
 
+def day_in_season(day: date, start: tuple[int, int], end: tuple[int, int]) -> bool:
+    """Return whether a date is inside an inclusive, possibly wrapping (month, day) range."""
+    current = (day.month, day.day)
+    return start <= current <= end if start <= end else current >= start or current <= end
+
+
+def ignore_solar_in_season(
+    hours: Sequence[HourPrice], start: tuple[int, int], end: tuple[int, int]
+) -> int:
+    """Remove PV production from hours whose local date is inside the season."""
+    ignored = 0
+    for hour in hours:
+        if day_in_season(hour.start.date(), start, end):
+            hour.pv_wh = 0.0
+            ignored += 1
+    return ignored
+
+
 def apply_solar_window_fallback(
     hours: Sequence[HourPrice],
     sun_events: Mapping[date, tuple[datetime | None, datetime | None]],

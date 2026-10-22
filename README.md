@@ -30,6 +30,7 @@ can be monitored or overridden from the generated entities or the bundled Lovela
 - Forecast.Solar support through the Home Assistant Energy Dashboard.
 - Shared PV allocation by device priority without double-counting production.
 - Seasonal sunrise/sunset fallback when a solar forecast is unavailable.
+- Optional winter period that plans without PV, for example 15 October – 15 February.
 - VAT, purchase/sale margins, day/night tariffs, weekends, and public holidays.
 - Shadow mode, explicit failure modes, output inversion, and timed manual overrides.
 - Generated sensors, controls, services, WebSocket updates, and three Lovelace cards.
@@ -106,6 +107,7 @@ The integration-level **Configure** action contains settings shared by every loa
 - weekend and public-holiday night tariff behavior;
 - weather entity and house base load;
 - solar fallback season and sunrise/sunset offsets;
+- optional winter period in which PV production is ignored;
 - optional grid/PV power sensors used for diagnostics;
 - shadow mode and tariff confirmation.
 
@@ -166,6 +168,13 @@ If all providers are missing or fail, the optional fallback can model solar avai
 between configurable sunrise/sunset offsets and months. Outside that fallback window,
 forecast production is zero and price-only planning continues with a warning. The optional
 PV power sensor is diagnostic only; it is not used as a forecast source.
+
+The optional **winter period** ignores both forecast and fallback PV on every local day
+between the configured first and last month/day, inclusive. The range may wrap the new
+year, so `10/15` to `2/15` covers 15 October through 15 February. While the whole planning
+horizon is inside the winter period, the solar forecast is not requested at all and the
+cards show *PV talvel arvestamata*. The house base load and price-only planning are
+unchanged.
 
 ### Weather compensation
 

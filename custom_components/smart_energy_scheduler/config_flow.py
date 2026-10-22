@@ -67,6 +67,11 @@ from .const import (
     CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H,
     CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H,
     CONF_SOLAR_PRIORITY,
+    CONF_SOLAR_WINTER_ENABLED,
+    CONF_SOLAR_WINTER_END_DAY,
+    CONF_SOLAR_WINTER_END_MONTH,
+    CONF_SOLAR_WINTER_START_DAY,
+    CONF_SOLAR_WINTER_START_MONTH,
     CONF_TARGET_ENTITY,
     CONF_TARIFF_CONFIRMED,
     CONF_USE_WEATHER,
@@ -155,6 +160,26 @@ def _main_schema(defaults: dict[str, Any]) -> vol.Schema:
             CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H,
             default=defaults.get(CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H, 2.0),
         ): _number(0, 12, 0.5, "h"),
+        vol.Required(
+            CONF_SOLAR_WINTER_ENABLED,
+            default=defaults.get(CONF_SOLAR_WINTER_ENABLED, False),
+        ): selector.BooleanSelector(),
+        vol.Required(
+            CONF_SOLAR_WINTER_START_MONTH,
+            default=defaults.get(CONF_SOLAR_WINTER_START_MONTH, 10),
+        ): _number(1, 12, 1),
+        vol.Required(
+            CONF_SOLAR_WINTER_START_DAY,
+            default=defaults.get(CONF_SOLAR_WINTER_START_DAY, 15),
+        ): _number(1, 31, 1),
+        vol.Required(
+            CONF_SOLAR_WINTER_END_MONTH,
+            default=defaults.get(CONF_SOLAR_WINTER_END_MONTH, 2),
+        ): _number(1, 12, 1),
+        vol.Required(
+            CONF_SOLAR_WINTER_END_DAY,
+            default=defaults.get(CONF_SOLAR_WINTER_END_DAY, 15),
+        ): _number(1, 31, 1),
         vol.Optional(
             CONF_GRID_POWER_SENSOR, default=defaults.get(CONF_GRID_POWER_SENSOR)
         ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),

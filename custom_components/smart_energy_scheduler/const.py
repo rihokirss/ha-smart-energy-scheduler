@@ -25,6 +25,11 @@ CONF_SOLAR_FALLBACK_START_MONTH = "solar_fallback_start_month"
 CONF_SOLAR_FALLBACK_END_MONTH = "solar_fallback_end_month"
 CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H = "solar_fallback_sunrise_delay_h"
 CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H = "solar_fallback_sunset_advance_h"
+CONF_SOLAR_WINTER_ENABLED = "solar_winter_enabled"
+CONF_SOLAR_WINTER_START_MONTH = "solar_winter_start_month"
+CONF_SOLAR_WINTER_START_DAY = "solar_winter_start_day"
+CONF_SOLAR_WINTER_END_MONTH = "solar_winter_end_month"
+CONF_SOLAR_WINTER_END_DAY = "solar_winter_end_day"
 CONF_GRID_POWER_SENSOR = "grid_power_sensor"
 CONF_PV_POWER_SENSOR = "pv_power_sensor"
 CONF_SHADOW_MODE = "shadow_mode"
@@ -83,6 +88,11 @@ DEFAULT_MAIN = {
     CONF_SOLAR_FALLBACK_END_MONTH: 9,
     CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H: 3.0,
     CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H: 2.0,
+    CONF_SOLAR_WINTER_ENABLED: False,
+    CONF_SOLAR_WINTER_START_MONTH: 10,
+    CONF_SOLAR_WINTER_START_DAY: 15,
+    CONF_SOLAR_WINTER_END_MONTH: 2,
+    CONF_SOLAR_WINTER_END_DAY: 15,
     CONF_SHADOW_MODE: True,
 }
 

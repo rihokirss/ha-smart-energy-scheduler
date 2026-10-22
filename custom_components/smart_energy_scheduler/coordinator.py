@@ -62,6 +62,11 @@ from .const import (
     CONF_SOLAR_FALLBACK_SUNRISE_DELAY_H,
     CONF_SOLAR_FALLBACK_SUNSET_ADVANCE_H,
     CONF_SOLAR_PRIORITY,
+    CONF_SOLAR_WINTER_ENABLED,
+    CONF_SOLAR_WINTER_END_DAY,
+    CONF_SOLAR_WINTER_END_MONTH,
+    CONF_SOLAR_WINTER_START_DAY,
+    CONF_SOLAR_WINTER_START_MONTH,
     CONF_TARGET_ENTITY,
     CONF_USE_WEATHER,
     CONF_VAT,
@@ -85,8 +90,10 @@ from .engine import (
     aggregate_hourly,
     apply_solar_window_fallback,
     build_plans,
+    day_in_season,
     distribute_hour_energy,
     forecast_window_average,
+    ignore_solar_in_season,
     is_complete_price_day,
     is_in_window,
     legacy_wind_chill,
@@ -296,6 +303,22 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             holiday_country=str(data.get(CONF_AREA) or "").upper() or None,
         )
 
+    def _solar_winter_season(self) -> tuple[tuple[int, int], tuple[int, int]] | None:
+        """Return the inclusive (month, day) range in which PV is ignored."""
+        data = self.entry.data
+        if not data.get(CONF_SOLAR_WINTER_ENABLED, False):
+            return None
+        return (
+            (
+                int(data.get(CONF_SOLAR_WINTER_START_MONTH, 10)),
+                int(data.get(CONF_SOLAR_WINTER_START_DAY, 15)),
+            ),
+            (
+                int(data.get(CONF_SOLAR_WINTER_END_MONTH, 2)),
+                int(data.get(CONF_SOLAR_WINTER_END_DAY, 15)),
+            ),
+        )
+
     @staticmethod
     def _grid_start(moment: datetime, step_minutes: int) -> datetime:
         """Floor a local timestamp to the configured switching grid."""
@@ -503,19 +526,26 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
             _LOGGER.warning("Unable to build price horizon: %s", err)
             return SchedulerData(generated_at=now, error=f"price_data: {err}")
 
+        winter_season = self._solar_winter_season()
+        winter_only = winter_season is not None and all(
+            day_in_season(hour.start.date(), *winter_season) for hour in hours
+        )
         solar_missing = False
         solar: list[Mapping[str, float]] = []
-        try:
-            solar = await self._async_fetch_solar()
-            if not any(provider for provider in solar):
-                warnings.append("solar_forecast_missing")
+        if not winter_only:
+            try:
+                solar = await self._async_fetch_solar()
+                if not any(provider for provider in solar):
+                    warnings.append("solar_forecast_missing")
+                    solar_missing = True
+            except Exception as err:  # noqa: BLE001
+                warnings.append(f"solar_forecast_error: {err}")
                 solar_missing = True
-        except Exception as err:  # noqa: BLE001
-            warnings.append(f"solar_forecast_error: {err}")
-            solar_missing = True
         merge_solar_forecast(hours, solar, float(self.entry.data[CONF_BASE_LOAD_W]))
         distribute_hour_energy(hours, price_slots)
         solar_source = "price_only" if solar_missing else "forecast"
+        if winter_only:
+            solar_source = "winter"
 
         try:
             (
@@ -693,6 +723,9 @@ class SmartEnergyCoordinator(DataUpdateCoordinator[SchedulerData]):
                 warnings.append(f"solar_fallback_error: {err}")
         elif solar_missing:
             warnings.append("solar_fallback_disabled")
+        # Applied after the fallback so neither forecast nor fallback PV counts in winter.
+        if winter_season is not None and ignore_solar_in_season(hours, *winter_season):
+            distribute_hour_energy(hours, price_slots)
 
         forced_states: dict[str, dict[float, bool]] = {}
         initial_states: dict[str, tuple[bool, int]] = {}
