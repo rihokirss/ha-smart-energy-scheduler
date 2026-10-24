@@ -3,7 +3,7 @@
 <img src="custom_components/smart_energy_scheduler/brand/icon.png" alt="Smart Energy Scheduler: välguga maja" width="96" height="96">
 
 [![Validate](https://github.com/rihokirss/ha-smart-energy-scheduler/actions/workflows/validate.yml/badge.svg)](https://github.com/rihokirss/ha-smart-energy-scheduler/actions/workflows/validate.yml)
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
+[![HACS Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rihokirss&repository=ha-smart-energy-scheduler&category=integration)
 [![Home Assistant 2026.8+](https://img.shields.io/badge/Home%20Assistant-2026.8%2B-18BCF2.svg)](https://www.home-assistant.io/)
 
 🇬🇧 **English:** [README.md](README.md)
@@ -85,20 +85,13 @@ Hinnad loetakse [Nord Pooli kohandatud integratsiooni](https://github.com/custom
 > integratsioon ja asendab selle. Sisseehitatud integratsiooni olemasolevad kirjed tuleb
 > kohandatud integratsiooniga uuesti luua.
 
-### 2. Lisa see repo HACS-i
+### 2. Leia Smart Energy Scheduler HACS-ist
 
-Repo pole veel HACS-i vaikekataloogis, seega lisa see kohandatud repona (custom repository).
-Allolev nupp avab vastava akna otse:
+Smart Energy Scheduler on HACS-i vaikekataloogis
+([heaks kiidetud 24. oktoobril 2026](https://github.com/hacs/default/pull/12470)).
+Ava külgribalt **HACS** ja otsi **Smart Energy Scheduler** või kasuta allolevat nuppu:
 
 [![Ava Smart Energy Scheduler HACS-is.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rihokirss&repository=ha-smart-energy-scheduler&category=integration)
-
-Või lisa see käsitsi:
-
-1. Ava külgribalt **HACS**.
-2. Ava paremal üleval kolme punkti menüü ja vali **Custom repositories**.
-3. Sisesta väljale **Repository** `https://github.com/rihokirss/ha-smart-energy-scheduler`,
-   vali **Type** väärtuseks **Integration** ja vajuta **Add**.
-4. Sulge aken.
 
 ### 3. Laadi alla ja taaskäivita
 

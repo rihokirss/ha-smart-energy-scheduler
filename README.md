@@ -3,7 +3,7 @@
 <img src="custom_components/smart_energy_scheduler/brand/icon.png" alt="Smart Energy Scheduler: home with a lightning bolt" width="96" height="96">
 
 [![Validate](https://github.com/rihokirss/ha-smart-energy-scheduler/actions/workflows/validate.yml/badge.svg)](https://github.com/rihokirss/ha-smart-energy-scheduler/actions/workflows/validate.yml)
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
+[![HACS Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rihokirss&repository=ha-smart-energy-scheduler&category=integration)
 [![Home Assistant 2026.8+](https://img.shields.io/badge/Home%20Assistant-2026.8%2B-18BCF2.svg)](https://www.home-assistant.io/)
 
 🇪🇪 **Eesti keeles:** [README.et.md](README.et.md)
@@ -79,20 +79,13 @@ if **Settings → Tools → Actions** already lists `nordpool.hourly`.
 > integration and replaces it. Existing built-in Nord Pool entries must be re-created with the
 > custom integration.
 
-### 2. Add this repository to HACS
+### 2. Find Smart Energy Scheduler in HACS
 
-The repository is not in the HACS default catalog yet, so add it as a custom repository.
-The button below opens the dialog directly:
+Smart Energy Scheduler is included in the HACS default catalog
+([approved on 24 October 2026](https://github.com/hacs/default/pull/12470)).
+Open **HACS** from the sidebar and search for **Smart Energy Scheduler**, or use this button:
 
 [![Open Smart Energy Scheduler in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rihokirss&repository=ha-smart-energy-scheduler&category=integration)
-
-Or add it by hand:
-
-1. Open **HACS** from the sidebar.
-2. Open the three-dot menu in the top-right corner and choose **Custom repositories**.
-3. Enter `https://github.com/rihokirss/ha-smart-energy-scheduler` as **Repository**, choose
-   **Integration** as **Type**, and select **Add**.
-4. Close the dialog.
 
 ### 3. Download and restart
 
