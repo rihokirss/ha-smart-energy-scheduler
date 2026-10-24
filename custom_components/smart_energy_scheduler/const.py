@@ -98,7 +98,6 @@ DEFAULT_MAIN = {
 
 DEFAULT_HEAT_PUMP = {
     "name": "Soojuspump",
-    CONF_TARGET_ENTITY: "switch.sonoff_1001208b81_1",
     CONF_INVERTED: False,
     CONF_POWER_MULTIPLIER: 1.0,
     CONF_NOMINAL_POWER_W: 2500.0,

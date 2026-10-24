@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Energiajuhtimise seadistamine",
-        "description": "Kontrolli imporditud tariife. Vaikimisi on varirežiim sees ja seadmeid veel ei juhita.",
+        "description": "Kontrolli tariife. Pärast seadistamist vali Lisa juhitav seade ja määra oma sihtolem. Vaikimisi on varirežiim sees.",
         "data": {
           "area": "Nord Pooli hinnapiirkond",
           "currency": "Valuuta",

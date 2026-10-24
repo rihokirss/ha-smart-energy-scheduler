@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Set up energy scheduling",
-        "description": "Confirm the imported tariff values. Shadow mode is enabled by default, so no device is controlled yet.",
+        "description": "Confirm the tariff values. After setup, use Add controlled device to select your own target entity. Shadow mode is enabled by default.",
         "data": {
           "area": "Nord Pool area",
           "currency": "Currency",

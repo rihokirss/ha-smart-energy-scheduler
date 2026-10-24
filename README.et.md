@@ -114,11 +114,12 @@ Lisa sidumine*) ja otsi **Smart Energy Scheduler**. Vormis:
 
 ### 5. Seadista juhitav seade
 
-Seadistamisel luuakse näidisseade nimega **Soojuspump**. Integratsiooni lehel
+Esmane seadistus loob ajastaja ilma juhitavate seadmeteta. Integratsiooni lehel
 (**Settings → Devices & services → Smart Energy Scheduler**):
 
-1. Vali **Soojuspump** realt **Configure device** (*Seadista seade*).
-2. Vali oma `switch`, `input_boolean` või `light` olem ja vaata kõik sektsioonid üle.
+1. Vali **Add controlled device** (*Lisa juhitav seade*).
+2. Anna seadmele nimi, vali oma `switch`, `input_boolean` või `light` olem ning kohanda
+   tööaja, võimsuse ja ilma järgi juhtimise seaded oma seadmele sobivaks.
 3. Lisa teisi seadmeid, näiteks boiler, nupuga **Add controlled device** (*Lisa juhitav
    seade*).
 

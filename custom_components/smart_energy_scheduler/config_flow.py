@@ -81,7 +81,6 @@ from .const import (
     CONF_WEEKEND_NIGHT,
     CONF_WINDOW_END,
     CONF_WINDOW_START,
-    DEFAULT_HEAT_PUMP,
     DEFAULT_MAIN,
     DOMAIN,
     FAILURE_FORCE_OFF,
@@ -221,8 +220,10 @@ def _device_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Build one device form with native collapsible sections."""
     device_fields: dict[Any, Any] = {
         vol.Required("name", default=defaults.get("name", "Seade")): str,
-        vol.Required(
-            CONF_TARGET_ENTITY, default=defaults.get(CONF_TARGET_ENTITY)
+        (
+            vol.Required(CONF_TARGET_ENTITY, default=defaults[CONF_TARGET_ENTITY])
+            if defaults.get(CONF_TARGET_ENTITY)
+            else vol.Required(CONF_TARGET_ENTITY)
         ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain=["switch", "input_boolean", "light"])
         ),
@@ -358,7 +359,7 @@ class SmartEnergySchedulerConfigFlow(ConfigFlow, domain=DOMAIN):
         return {SUBENTRY_DEVICE: DeviceSubentryFlow}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Create the scheduler and its initial heat-pump device."""
+        """Create the scheduler; controlled devices are added separately."""
         errors: dict[str, str] = {}
         if self._async_current_entries():
             return self.async_abort(reason="single_instance_allowed")
@@ -366,18 +367,9 @@ class SmartEnergySchedulerConfigFlow(ConfigFlow, domain=DOMAIN):
             if not user_input[CONF_TARIFF_CONFIRMED]:
                 errors[CONF_TARIFF_CONFIRMED] = "tariff_not_confirmed"
             else:
-                heat_pump = dict(DEFAULT_HEAT_PUMP)
                 return self.async_create_entry(
                     title="Smart Energy Scheduler",
                     data=clean_config_data(user_input),
-                    subentries=[
-                        {
-                            "subentry_type": SUBENTRY_DEVICE,
-                            "title": heat_pump.pop("name"),
-                            "data": heat_pump,
-                            "unique_id": "heat_pump",
-                        }
-                    ],
                 )
         defaults = DEFAULT_MAIN | (user_input or {})
         return self.async_show_form(

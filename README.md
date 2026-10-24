@@ -108,14 +108,12 @@ Or open **Settings → Devices & services → Add integration** and search for
 
 ### 5. Configure the controlled device
 
-Setup creates a sample heat-pump configuration named **Soojuspump** (Estonian for
-“heat pump”). This is a starting point: you can rename it and adapt its settings to any
-supported load. On the integration page
+Setup creates the scheduler without any controlled devices. On the integration page
 (**Settings → Devices & services → Smart Energy Scheduler**):
 
-1. On the **Soojuspump** row, choose **Configure device**.
+1. Choose **Add controlled device**.
 2. Give the device a name, select your own target `switch`, `input_boolean`, or `light`,
-   and adjust the sample runtime, power, and weather settings to suit your device.
+   and adjust the runtime, power, and weather settings to suit your device.
 3. Use **Add controlled device** for additional loads such as a water heater.
 
 ### 6. Add the Lovelace cards (optional)
