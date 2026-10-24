@@ -6,7 +6,6 @@ import asyncio
 from unittest.mock import patch
 
 import pytest
-import voluptuous as vol
 
 pytest.importorskip("homeassistant")
 
@@ -21,6 +20,8 @@ from custom_components.smart_energy_scheduler.config_flow_helpers import (
     flatten_device_input,
 )
 from custom_components.smart_energy_scheduler.const import DEFAULT_HEAT_PUMP
+
+vol = pytest.importorskip("voluptuous")
 
 
 def test_device_schema_uses_native_sections_and_preserves_flat_storage() -> None:
